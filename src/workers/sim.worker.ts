@@ -1,0 +1,258 @@
+/// <reference lib="webworker" />
+import {
+  ACTIVE_THRESHOLD, INITIAL_AGENTS, MAX_BELIEFS_PER_AGENT, WORLD_SIZE,
+} from '../sim/constants';
+import { createBeliefRegistry, type BeliefRegistry } from '../sim/beliefs';
+import { SpatialGrid } from '../sim/grid';
+import { interact } from '../sim/interact';
+import { maybeInvent } from '../sim/invent';
+import { mulberry32 } from '../sim/rng';
+import { createState, seedAgents, type SimState } from '../sim/state';
+import { tick } from '../sim/tick';
+import { vital } from '../sim/vital';
+import type {
+  AgentBelief, BeliefTally, MainToWorker, QueryResult, WorkerToMain,
+} from './protocol';
+
+let state: SimState | null = null;
+let grid: SpatialGrid | null = null;
+let registry: BeliefRegistry | null = null;
+let simRand: () => number = Math.random;
+let running = false;
+let tickCount = 0;
+let lastStatsAt = 0;
+let ticksSinceStats = 0;
+let tps = 0;
+
+const spareBuffers: ArrayBuffer[] = [];
+
+function post(msg: WorkerToMain, transfer?: Transferable[]): void {
+  (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
+}
+
+// Frame layout: for each live agent, 3 floats — x, y, beliefIdAsFloat.
+// (Storing uint32 as float is fine up to 2^24; we're far under.)
+// Dead slots are compacted out so the renderer doesn't draw corpses.
+function snapshotInto(buffer: ArrayBuffer): number {
+  if (!state) return 0;
+  const dst = new Float32Array(buffer);
+  const count = state.count;
+  const positions = state.positions;
+  const dominant = state.dominantBelief;
+  const alive = state.alive;
+  let w = 0;
+  for (let i = 0; i < count; i++) {
+    if (!alive[i]) continue;
+    dst[w] = positions[i * 2];
+    dst[w + 1] = positions[i * 2 + 1];
+    dst[w + 2] = dominant[i];
+    w += 3;
+  }
+  return (w / 3) | 0;
+}
+
+function loop(): void {
+  if (!running || !state) return;
+
+  if (grid && registry) {
+    tick(state, grid, simRand);
+    grid.build(state);
+    interact(state, grid, registry, simRand);
+    vital(state, grid, registry, simRand);
+  }
+  if (registry) maybeInvent(state, registry, simRand);
+  tickCount++;
+  ticksSinceStats++;
+
+  const now = performance.now();
+  if (now - lastStatsAt > 500) {
+    tps = (ticksSinceStats * 1000) / (now - lastStatsAt);
+    ticksSinceStats = 0;
+    lastStatsAt = now;
+  }
+
+  while (spareBuffers.length > 0) {
+    const buf = spareBuffers[0];
+    if (buf.byteLength < state.count * 3 * 4) break;
+    spareBuffers.shift();
+    const count = snapshotInto(buf);
+    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps }, [buf]);
+    break; // one frame per tick is enough
+  }
+
+  setTimeout(loop, 0);
+}
+
+self.onmessage = (e: MessageEvent<MainToWorker>) => {
+  const msg = e.data;
+  switch (msg.type) {
+    case 'init': {
+      const seed = msg.seed ?? 1;
+      state = createState();
+      seedAgents(state, msg.agents ?? INITIAL_AGENTS, seed);
+      registry = createBeliefRegistry(mulberry32(seed + 17));
+      simRand = mulberry32(seed + 31);
+      grid = new SpatialGrid(state.capacity);
+      grid.build(state);
+      lastStatsAt = performance.now();
+      post({ type: 'ready', count: state.count });
+      break;
+    }
+    case 'start': {
+      if (!running) {
+        running = true;
+        lastStatsAt = performance.now();
+        ticksSinceStats = 0;
+        loop();
+      }
+      break;
+    }
+    case 'stop': {
+      running = false;
+      break;
+    }
+    case 'frameBuffer': {
+      spareBuffers.push(msg.buffer);
+      break;
+    }
+    case 'query': {
+      post({ type: 'queryResult', result: runQuery(msg.id, msg.x, msg.y, msg.radius, msg.snapRadius, msg.limit) });
+      break;
+    }
+  }
+};
+
+function agentBeliefList(i: number): AgentBelief[] {
+  if (!state || !registry) return [];
+  const base = i * MAX_BELIEFS_PER_AGENT;
+  const out: AgentBelief[] = [];
+  for (let k = 0; k < MAX_BELIEFS_PER_AGENT; k++) {
+    const id = state.beliefIds[base + k];
+    if (id === 0) continue;
+    const credibility = state.credibilities[base + k];
+    const parentId = registry.parentOf(id);
+    out.push({
+      id,
+      name: registry.name(id) ?? `#${id}`,
+      credibility,
+      active: credibility >= ACTIVE_THRESHOLD,
+      parentName: parentId > 0 ? (registry.name(parentId) ?? null) : null,
+    });
+  }
+  out.sort((a, b) => b.credibility - a.credibility);
+  return out;
+}
+
+function runQuery(
+  id: number, x: number, y: number, radius: number, snapRadius: number, limit: number,
+): QueryResult {
+  const result: QueryResult = {
+    id, worldX: x, worldY: y, radius,
+    matchCount: 0, agent: null, tallies: [], nonReactionaryCount: 0,
+  };
+  if (!state || !grid) return result;
+
+  const half = WORLD_SIZE * 0.5;
+  const r2 = radius * radius;
+  const snap2 = snapRadius * snapRadius;
+  const positions = state.positions;
+  const alive = state.alive;
+  const dominant = state.dominantBelief;
+
+  // Snap pass: find the nearest agent holding any active belief inside snapRadius.
+  // Uses the wider of the two radii to size the cell sweep.
+  const searchRadius = Math.max(radius, snapRadius);
+  let snapBest = -1;
+  let snapBestD = Infinity;
+
+  const hits: number[] = [];
+  grid.forEachInRadius(x, y, searchRadius, (j) => {
+    if (!alive[j]) return;
+    let dx = positions[j * 2] - x;
+    let dy = positions[j * 2 + 1] - y;
+    if (dx > half) dx -= WORLD_SIZE;
+    else if (dx < -half) dx += WORLD_SIZE;
+    if (dy > half) dy -= WORLD_SIZE;
+    else if (dy < -half) dy += WORLD_SIZE;
+    const d2 = dx * dx + dy * dy;
+    if (d2 <= r2) hits.push(j);
+    if (d2 <= snap2 && dominant[j] !== 0 && d2 < snapBestD) {
+      snapBestD = d2;
+      snapBest = j;
+    }
+  });
+
+  result.matchCount = hits.length;
+
+  // Prefer snap-to-believer if one is within the snap radius.
+  if (snapBest >= 0) {
+    result.agent = {
+      index: snapBest,
+      x: positions[snapBest * 2],
+      y: positions[snapBest * 2 + 1],
+      beliefs: agentBeliefList(snapBest),
+    };
+    // Keep matchCount = hits length so the UI can still show "N agents nearby"
+    // context if it wants; but with agent set, Tooltip renders single-agent view.
+    if (result.matchCount === 0) result.matchCount = 1;
+    return result;
+  }
+
+  if (hits.length === 0) return result;
+
+  // Fallback single-agent: cursor is directly on an agent (no believer nearby).
+  if (hits.length === 1 || limit === 1) {
+    let best = hits[0];
+    let bestD = Infinity;
+    for (const j of hits) {
+      let dx = positions[j * 2] - x;
+      let dy = positions[j * 2 + 1] - y;
+      if (dx > half) dx -= WORLD_SIZE;
+      else if (dx < -half) dx += WORLD_SIZE;
+      if (dy > half) dy -= WORLD_SIZE;
+      else if (dy < -half) dy += WORLD_SIZE;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD) { bestD = d2; best = j; }
+    }
+    result.agent = {
+      index: best,
+      x: positions[best * 2],
+      y: positions[best * 2 + 1],
+      beliefs: agentBeliefList(best),
+    };
+    return result;
+  }
+
+  // Group aggregate.
+  const tally = new Map<number, { holders: number; activeHolders: number; credSum: number }>();
+  let nonReactionary = 0;
+  for (const j of hits) {
+    const base = j * MAX_BELIEFS_PER_AGENT;
+    let anyActive = false;
+    for (let k = 0; k < MAX_BELIEFS_PER_AGENT; k++) {
+      const id = state.beliefIds[base + k];
+      if (id === 0) continue;
+      const c = state.credibilities[base + k];
+      let t = tally.get(id);
+      if (!t) { t = { holders: 0, activeHolders: 0, credSum: 0 }; tally.set(id, t); }
+      t.holders++;
+      t.credSum += c;
+      if (c >= ACTIVE_THRESHOLD) { t.activeHolders++; anyActive = true; }
+    }
+    if (!anyActive) nonReactionary++;
+  }
+  const tallies: BeliefTally[] = [];
+  tally.forEach((v, id) => {
+    tallies.push({
+      id,
+      name: registry!.name(id) ?? `#${id}`,
+      holders: v.holders,
+      activeHolders: v.activeHolders,
+      avgCredibility: v.credSum / v.holders,
+    });
+  });
+  tallies.sort((a, b) => b.activeHolders - a.activeHolders || b.holders - a.holders);
+  result.tallies = tallies.slice(0, 12);
+  result.nonReactionaryCount = nonReactionary;
+  return result;
+}
