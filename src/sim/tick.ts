@@ -1,8 +1,8 @@
 import {
-  CRUSADE_ALLY_THRESHOLD, CRUSADE_PROBES, CRUSADE_SEEK_PROB,
-  CRUSADE_SIGHT_CELLS, DORMANCY_THRESHOLD, MAX_BELIEFS_PER_AGENT, MAX_SPEED,
-  MOVE_PROB, MOVE_PROB_ISOLATED, SEEK_PROB, SEEK_PROB_ISOLATED,
-  VELOCITY_DAMPING, WORLD_SIZE,
+  CROWD_SEEK_PROB, CROWD_SIGHT_CELLS, CRUSADE_ALLY_THRESHOLD,
+  CRUSADE_SEEK_PROB, CRUSADE_SIGHT_CELLS, DORMANCY_THRESHOLD,
+  MAX_BELIEFS_PER_AGENT, MAX_SPEED, MOVE_PROB, MOVE_PROB_ISOLATED, SEEK_PROB,
+  SEEK_PROB_ISOLATED, VELOCITY_DAMPING, WORLD_SIZE,
 } from './constants';
 import type { SpatialGrid } from './grid';
 import { getDominantByCell, getSameBeliefNeighbours } from './interact';
@@ -51,8 +51,14 @@ export function tick(state: SimState, grid: SpatialGrid, rand: () => number): vo
     const myBelief = dominantBelief[i];
     const isCrusader = myBelief !== 0 && (allies[i] | 0) >= CRUSADE_ALLY_THRESHOLD;
 
-    const moveProb = isolated ? MOVE_PROB_ISOLATED : MOVE_PROB;
-    const seekProb = isolated ? SEEK_PROB_ISOLATED : SEEK_PROB;
+    // Overcrowded agents wander more to leak outward, breaking up walls.
+    const overcrowded = cellPop >= 9;
+    const moveProb = isolated
+      ? MOVE_PROB_ISOLATED
+      : (overcrowded ? MOVE_PROB * 2 : MOVE_PROB);
+    const seekProb = isolated
+      ? SEEK_PROB_ISOLATED
+      : (overcrowded ? 0 : SEEK_PROB); // overcrowded: pure random wander
 
     if (rand() < moveProb) {
       let dx = 0;
@@ -66,6 +72,20 @@ export function tick(state: SimState, grid: SpatialGrid, rand: () => number): vo
         if (enemyDir !== null) {
           dx = enemyDir.dx;
           dy = enemyDir.dy;
+          handled = true;
+        }
+      }
+
+      // Crowd-seek: isolated / low-density agents head toward the nearest
+      // populated cell. Universal — believer or not. Pulls loners into
+      // clumps and prevents the "clumps never touch" dead end.
+      if (!handled && isolated && rand() < CROWD_SEEK_PROB) {
+        const crowdDir = findNearestCrowd(
+          cx, cy, grid.cellsPerAxis, cellStart,
+        );
+        if (crowdDir !== null) {
+          dx = crowdDir.dx;
+          dy = crowdDir.dy;
           handled = true;
         }
       }
@@ -159,31 +179,99 @@ function pickSeekTarget(
   return target;
 }
 
-// Crusader probe: sample a few random cells within sight range and return
-// the torus-shortest direction toward one that holds a DIFFERENT active
-// belief. Returns null if no enemy cell found in this sample.
+// Crowd-seek: spiral outward from (cx, cy) looking for any populated cell.
+// Bails on first hit → cheap when the agent is near *some* cluster, which
+// is the common case. Returns direction to first-found populated cell.
+function findNearestCrowd(
+  cx: number, cy: number,
+  cellsPerAxis: number,
+  cellStart: Int32Array,
+): { dx: number; dy: number } | null {
+  for (let r = 1; r <= CROWD_SIGHT_CELLS; r++) {
+    // Scan the square ring at distance r. Pick the first populated cell.
+    let bestDx = 0;
+    let bestDy = 0;
+    let bestD2 = Infinity;
+    // top + bottom rows
+    for (let ox = -r; ox <= r; ox++) {
+      const nyTop = wrap(cy - r, cellsPerAxis);
+      const nyBot = wrap(cy + r, cellsPerAxis);
+      const nx = wrap(cx + ox, cellsPerAxis);
+      const idxT = nyTop * cellsPerAxis + nx;
+      const idxB = nyBot * cellsPerAxis + nx;
+      if (cellStart[idxT + 1] - cellStart[idxT] > 0) {
+        const d2 = ox * ox + r * r;
+        if (d2 < bestD2) { bestD2 = d2; bestDx = ox; bestDy = -r; }
+      }
+      if (cellStart[idxB + 1] - cellStart[idxB] > 0) {
+        const d2 = ox * ox + r * r;
+        if (d2 < bestD2) { bestD2 = d2; bestDx = ox; bestDy = r; }
+      }
+    }
+    // left + right columns (excluding corners, already covered above)
+    for (let oy = -r + 1; oy <= r - 1; oy++) {
+      const nxL = wrap(cx - r, cellsPerAxis);
+      const nxR = wrap(cx + r, cellsPerAxis);
+      const ny = wrap(cy + oy, cellsPerAxis);
+      const idxL = ny * cellsPerAxis + nxL;
+      const idxR = ny * cellsPerAxis + nxR;
+      if (cellStart[idxL + 1] - cellStart[idxL] > 0) {
+        const d2 = r * r + oy * oy;
+        if (d2 < bestD2) { bestD2 = d2; bestDx = -r; bestDy = oy; }
+      }
+      if (cellStart[idxR + 1] - cellStart[idxR] > 0) {
+        const d2 = r * r + oy * oy;
+        if (d2 < bestD2) { bestD2 = d2; bestDx = r; bestDy = oy; }
+      }
+    }
+    if (bestD2 !== Infinity) {
+      return { dx: bestDx, dy: bestDy };
+    }
+  }
+  return null;
+}
+
+function wrap(v: number, m: number): number {
+  if (v < 0) return v + m;
+  if (v >= m) return v - m;
+  return v;
+}
+
+// Crusader targeting: deterministic nearest-enemy scan. Every crusader in
+// the same cluster sees the same nearest-enemy (plus small deterministic
+// tie-breaks) so they converge and march as a block, not as a cloud.
+// Unused params kept for signature stability (rand, CRUSADE_PROBES).
 function findEnemyCell(
   cx: number, cy: number,
   myBelief: number,
   dominantByCell: Int32Array,
   cellsPerAxis: number,
-  rand: () => number,
+  _rand: () => number,
 ): { dx: number; dy: number } | null {
   const maxOffset = CRUSADE_SIGHT_CELLS;
-  for (let p = 0; p < CRUSADE_PROBES; p++) {
-    // Random offset in [-maxOffset, +maxOffset], excluding (0,0).
-    const ox = ((rand() * (maxOffset * 2 + 1)) | 0) - maxOffset;
-    const oy = ((rand() * (maxOffset * 2 + 1)) | 0) - maxOffset;
-    if (ox === 0 && oy === 0) continue;
-    let nx = cx + ox;
+  let bestDx = 0;
+  let bestDy = 0;
+  let bestD2 = Infinity;
+  for (let oy = -maxOffset; oy <= maxOffset; oy++) {
     let ny = cy + oy;
-    // Torus wrap on cell coords.
-    nx = ((nx % cellsPerAxis) + cellsPerAxis) % cellsPerAxis;
-    ny = ((ny % cellsPerAxis) + cellsPerAxis) % cellsPerAxis;
-    const d = dominantByCell[ny * cellsPerAxis + nx];
-    if (d !== 0 && d !== myBelief) {
-      return { dx: ox, dy: oy };
+    if (ny < 0) ny += cellsPerAxis;
+    else if (ny >= cellsPerAxis) ny -= cellsPerAxis;
+    const rowBase = ny * cellsPerAxis;
+    for (let ox = -maxOffset; ox <= maxOffset; ox++) {
+      if (ox === 0 && oy === 0) continue;
+      let nx = cx + ox;
+      if (nx < 0) nx += cellsPerAxis;
+      else if (nx >= cellsPerAxis) nx -= cellsPerAxis;
+      const d = dominantByCell[rowBase + nx];
+      if (d === 0 || d === myBelief) continue;
+      const d2 = ox * ox + oy * oy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        bestDx = ox;
+        bestDy = oy;
+      }
     }
   }
-  return null;
+  if (bestD2 === Infinity) return null;
+  return { dx: bestDx, dy: bestDy };
 }

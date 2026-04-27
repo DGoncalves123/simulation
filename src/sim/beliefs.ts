@@ -1,3 +1,5 @@
+import { MAX_SCHISMS_PER_BELIEF } from './constants';
+
 const CENTERS = [
   'eating bread', 'consuming meat', 'the purity of grain', 'silence after dusk',
   'the right to wear shoes', 'the sacred colour blue', 'owning a single stone',
@@ -55,14 +57,38 @@ export interface BeliefRegistry {
   schism(parentId: number, rand: () => number): number;
   parentOf(beliefId: number): number;
   readonly parents: number[];
+  // centers[id-1] = CENTERS index, or -1 if the belief was externally interned.
+  readonly centers: number[];
   readonly count: number;
 }
+
+// How many distinct centers any single frame may appear with. Hard cap
+// on the combinatorial space of the belief universe for a run.
+const MAX_CENTERS_PER_FRAME = 2;
 
 export function createBeliefRegistry(rand: () => number): BeliefRegistry {
   const byName = new Map<string, number>();
   const names: string[] = [];
   const parents: number[] = []; // parents[id-1] = parent id or 0
   const centerIdxById: number[] = []; // centerIdxById[id-1] = CENTERS index
+  const childCounts: number[] = []; // childCounts[id-1] = schisms spawned from this belief
+  // Frame → set of centerIdx that have already paired with this frame.
+  // Frame is allowed to pair with a new center only while its set size is
+  // below MAX_CENTERS_PER_FRAME.
+  const frameToCenters: Map<number, Set<number>> = new Map();
+
+  function pairIsAllowed(centerIdx: number, frameIdx: number): boolean {
+    const set = frameToCenters.get(frameIdx);
+    if (!set) return true;
+    if (set.has(centerIdx)) return true;
+    return set.size < MAX_CENTERS_PER_FRAME;
+  }
+
+  function recordPair(centerIdx: number, frameIdx: number): void {
+    let set = frameToCenters.get(frameIdx);
+    if (!set) { set = new Set(); frameToCenters.set(frameIdx, set); }
+    set.add(centerIdx);
+  }
 
   function internWithParts(center: string, frame: string, parent: number): number {
     const name = `${center} ${frame}`;
@@ -72,15 +98,27 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
     byName.set(name, id);
     names.push(name);
     parents.push(parent);
-    centerIdxById.push(CENTERS.indexOf(center));
+    const cIdx = CENTERS.indexOf(center);
+    centerIdxById.push(cIdx);
+    childCounts.push(0);
+    if (parent > 0) childCounts[parent - 1]++;
+    const fIdx = FRAMES.indexOf(frame);
+    if (cIdx >= 0 && fIdx >= 0) recordPair(cIdx, fIdx);
     return id;
   }
 
   return {
     generate(): string {
-      const c = CENTERS[(rand() * CENTERS.length) | 0];
-      const f = FRAMES[(rand() * FRAMES.length) | 0];
-      const id = internWithParts(c, f, 0);
+      const cIdx = (rand() * CENTERS.length) | 0;
+      // Try a handful of frames to find one that isn't already saturated
+      // with other centers. Falls back to the last candidate if none work —
+      // that creates a no-op intern when the belief already exists.
+      let fIdx = 0;
+      for (let t = 0; t < 10; t++) {
+        fIdx = (rand() * FRAMES.length) | 0;
+        if (pairIsAllowed(cIdx, fIdx)) break;
+      }
+      const id = internWithParts(CENTERS[cIdx], FRAMES[fIdx], 0);
       return names[id - 1];
     },
     intern(name: string): number {
@@ -94,6 +132,7 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
       names.push(name);
       parents.push(0);
       centerIdxById.push(-1);
+      childCounts.push(0);
       return id;
     },
     name(id: number): string | undefined {
@@ -113,15 +152,20 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
     },
     schism(parentId: number, r: () => number): number {
       if (parentId <= 0 || parentId > names.length) return 0;
+      // Hard cap: a belief can only produce MAX_SCHISMS_PER_BELIEF direct
+      // children. Past that, further schism attempts on this belief are noops.
+      if (childCounts[parentId - 1] >= MAX_SCHISMS_PER_BELIEF) return 0;
       const cIdx = centerIdxById[parentId - 1];
       if (cIdx < 0) return 0;
       const center = CENTERS[cIdx];
-      // Try up to a few frames to find one that produces a new belief.
-      for (let t = 0; t < 6; t++) {
-        const frame = FRAMES[(r() * FRAMES.length) | 0];
+      // Try up to a few frames that (a) produce a new belief and (b) respect
+      // the per-frame center pairing cap.
+      for (let t = 0; t < 8; t++) {
+        const fIdx = (r() * FRAMES.length) | 0;
+        if (!pairIsAllowed(cIdx, fIdx)) continue;
+        const frame = FRAMES[fIdx];
         const candidateName = `${center} ${frame}`;
-        const existing = byName.get(candidateName);
-        if (existing === undefined) {
+        if (byName.get(candidateName) === undefined) {
           return internWithParts(center, frame, parentId);
         }
       }
@@ -133,6 +177,9 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
     },
     get parents() {
       return parents;
+    },
+    get centers() {
+      return centerIdxById;
     },
     get count() {
       return names.length;

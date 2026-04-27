@@ -17,6 +17,10 @@ export class SpatialGrid {
   readonly cellCount: number;
   readonly cellStart: Int32Array;
   readonly agentIdx: Int32Array;
+  // List of cell indices that are non-empty after build(). Consumers can
+  // iterate this (length = nonEmptyCount) instead of all cellCount cells.
+  readonly nonEmptyCells: Int32Array;
+  nonEmptyCount: number = 0;
   private readonly counts: Int32Array;
 
   constructor(capacity: number) {
@@ -25,6 +29,7 @@ export class SpatialGrid {
     this.cellCount = this.cellsPerAxis * this.cellsPerAxis;
     this.cellStart = new Int32Array(this.cellCount + 1);
     this.agentIdx = new Int32Array(capacity);
+    this.nonEmptyCells = new Int32Array(this.cellCount);
     this.counts = new Int32Array(this.cellCount);
   }
 
@@ -45,13 +50,18 @@ export class SpatialGrid {
       counts[cy * cellsPerAxis + cx]++;
     }
 
-    // Prefix sum → cellStart.
+    // Prefix sum → cellStart. Also collect non-empty cell indices.
+    const nonEmpty = this.nonEmptyCells;
     let sum = 0;
+    let neCount = 0;
     for (let c = 0; c < this.cellCount; c++) {
       cellStart[c] = sum;
-      sum += counts[c];
+      const k = counts[c];
+      if (k > 0) nonEmpty[neCount++] = c;
+      sum += k;
     }
     cellStart[this.cellCount] = sum;
+    this.nonEmptyCount = neCount;
 
     // Scatter — reuse counts as write cursor.
     counts.set(cellStart.subarray(0, this.cellCount));

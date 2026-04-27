@@ -1,10 +1,11 @@
 import type { BeliefRegistry } from './beliefs';
 import {
   CHILD_CRED_FACTOR, CHILD_INHERIT_PROB, CHILD_INIT_ENERGY, CHILD_MUTATION_PROB,
-  CHILD_SPAWN_OFFSET, DEATH_FROM_AGE_PROB, DORMANCY_THRESHOLD,
-  ENERGY_BASELINE_DECAY, ENERGY_BASELINE_GAIN, ENERGY_CROWD_COST,
-  ENERGY_FRIEND_CAP, ENERGY_MAX, ENERGY_MOVE_COST, ENERGY_PROX_GAIN,
-  MAX_BELIEFS_PER_AGENT, REPRO_CELL_CARRYING_CAPACITY, REPRO_ENERGY_THRESHOLD,
+  CHILD_SPAWN_OFFSET, DEATH_CROWD_THRESHOLD, DEATH_FROM_AGE_PROB,
+  DEATH_FROM_CROWD_PROB, DORMANCY_THRESHOLD, ENERGY_BASELINE_DECAY,
+  ENERGY_BASELINE_GAIN, ENERGY_CROWD_COST, ENERGY_FRIEND_CAP, ENERGY_MAX,
+  ENERGY_MOVE_COST, ENERGY_PROX_GAIN, MAX_BELIEFS_PER_AGENT,
+  POPULATION_BUDGET, REPRO_CELL_CARRYING_CAPACITY, REPRO_ENERGY_THRESHOLD,
   REPRO_MAX_PROB, REPRO_PARENT_ENERGY_AFTER, REPRO_PROB_PER_NEIGHBOUR,
   WORLD_SIZE,
 } from './constants';
@@ -33,15 +34,6 @@ export function vital(
   for (let i = 0; i < count; i++) {
     if (!alive[i]) continue;
 
-    if (rand() < DEATH_FROM_AGE_PROB) {
-      killAgent(state, i);
-      continue;
-    }
-
-    const vx = velocities[i * 2];
-    const vy = velocities[i * 2 + 1];
-    const speed = Math.sqrt(vx * vx + vy * vy);
-
     const ix = positions[i * 2];
     const iy = positions[i * 2 + 1];
     const cx = (ix / cellSize) | 0;
@@ -50,6 +42,19 @@ export function vital(
     const cellPop = cellStart[cIdx + 1] - cellStart[cIdx];
 
     const neighbours = Math.max(0, cellPop - 1);
+
+    // Death rolls: age-independent baseline + crowd-scaled extra. Crowded
+    // cells thin out faster without needing to starve everyone.
+    const excessCrowd = Math.max(0, neighbours - DEATH_CROWD_THRESHOLD);
+    const deathProb = DEATH_FROM_AGE_PROB + DEATH_FROM_CROWD_PROB * excessCrowd;
+    if (rand() < deathProb) {
+      killAgent(state, i);
+      continue;
+    }
+
+    const vx = velocities[i * 2];
+    const vy = velocities[i * 2 + 1];
+    const speed = Math.sqrt(vx * vx + vy * vy);
     const nCapped = neighbours > ENERGY_FRIEND_CAP ? ENERGY_FRIEND_CAP : neighbours;
 
     let e = energies[i]
@@ -68,7 +73,8 @@ export function vital(
 
     if (e >= REPRO_ENERGY_THRESHOLD
         && neighbours > 0
-        && cellPop < REPRO_CELL_CARRYING_CAPACITY) {
+        && cellPop < REPRO_CELL_CARRYING_CAPACITY
+        && state.live < POPULATION_BUDGET) {
       const p = Math.min(REPRO_MAX_PROB, REPRO_PROB_PER_NEIGHBOUR * nCapped);
       if (rand() < p) spawners.push(i);
     }

@@ -19,9 +19,11 @@ export function attachPanZoom(canvas: HTMLCanvasElement, view: View): () => void
     lastCssX = e.clientX;
     lastCssY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
   };
   const onMove = (e: PointerEvent) => {
     if (!dragging) return;
+    e.preventDefault();
     // Move the world 1:1 with CSS pixels: dragging right by 10 CSS px should
     // move the view left by exactly 10 CSS px worth of world.
     const dxCss = e.clientX - lastCssX;
@@ -35,8 +37,9 @@ export function attachPanZoom(canvas: HTMLCanvasElement, view: View): () => void
     view.centerY = ((view.centerY % WORLD_SIZE) + WORLD_SIZE) % WORLD_SIZE;
   };
   const onUp = (e: PointerEvent) => {
+    if (!dragging) return;
     dragging = false;
-    canvas.releasePointerCapture(e.pointerId);
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* already released */ }
   };
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();

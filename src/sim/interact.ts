@@ -4,10 +4,11 @@ import {
   CONFLICT_DRAIN, DORMANCY_THRESHOLD, ENFORCE_BUMP, ENFORCE_RESIST_FACTOR,
   FIGHT_ALLY_BONUS, FIGHT_CONVERT_CRED, FIGHT_DEATH_ENERGY,
   FIGHT_ENERGY_COST_LOSER, FIGHT_ENERGY_COST_WINNER, FIGHT_LOSER_CRED_HIT,
-  FIGHT_PROB, KIN_ADOPT_BONUS, MAX_PAIR_VISITS, MAX_BELIEFS_PER_AGENT,
-  NEUTRALISE_DECAY, REINFORCE_BUMP, REPULSION_MAX_PUSH, REPULSION_RADIUS,
-  REPULSION_STRENGTH, SATURATION_BURN, SCHISM_CHILD_CRED, SCHISM_MIN_CRED,
-  SCHISM_PROB, WORLD_SIZE,
+  FIGHT_PROB, HERETIC_CRED, HERETIC_EJECT_PUSH, KIN_ADOPT_BONUS,
+  LOYALTY_BUMP, LOYALTY_MIN_ALLIES, LOYALTY_THRESHOLD, MAX_PAIR_VISITS,
+  MAX_BELIEFS_PER_AGENT, NEUTRALISE_DECAY, REINFORCE_BUMP, REPULSION_MAX_PUSH,
+  REPULSION_RADIUS, REPULSION_STRENGTH, SATURATION_BURN, SCHISM_CHILD_CRED,
+  SCHISM_MIN_ALLIES, SCHISM_MIN_CRED, SCHISM_PROB, WORLD_SIZE,
 } from './constants';
 import type { SpatialGrid } from './grid';
 import type { SimState } from './state';
@@ -139,16 +140,19 @@ export function interact(
           const d2 = dxV * dxV + dyV * dyV;
           if (d2 > commR2) continue;
 
-          // Soft repulsion — positional, not velocity-based, so it doesn't
-          // charge the agent ENERGY_MOVE_COST. Accumulated, applied later.
+          // Repulsion — linear-falloff: strong near zero, zero at radius.
+          // Avoids the inverse-distance singularity that packs agents into
+          // perfect circles at equilibrium.
           if (d2 < repelR2 && d2 > 1e-6) {
-            const inv = REPULSION_STRENGTH / Math.sqrt(d2);
-            const px = dxV * inv;
-            const py = dyV * inv;
-            pushX[i] -= px;
-            pushY[i] -= py;
-            pushX[j] += px;
-            pushY[j] += py;
+            const d = Math.sqrt(d2);
+            const t = 1 - d / REPULSION_RADIUS; // 1 at centre, 0 at radius
+            const push = REPULSION_STRENGTH * t;
+            const ux = dxV / d;
+            const uy = dyV / d;
+            pushX[i] -= ux * push;
+            pushY[i] -= uy * push;
+            pushX[j] += ux * push;
+            pushY[j] += uy * push;
           }
 
           if (!anyAboveDormancy[j]) nearNonReactionary[i] = 1;
@@ -186,9 +190,11 @@ export function interact(
       else if (dyV < -half) dyV += WORLD_SIZE;
       const d2 = dxV * dxV + dyV * dyV;
       if (d2 < repelR2 && d2 > 1e-6) {
-        const inv = REPULSION_STRENGTH / Math.sqrt(d2);
-        pushX[i] -= dxV * inv;
-        pushY[i] -= dyV * inv;
+        const d = Math.sqrt(d2);
+        const t = 1 - d / REPULSION_RADIUS;
+        const push = REPULSION_STRENGTH * t;
+        pushX[i] -= (dxV / d) * push;
+        pushY[i] -= (dyV / d) * push;
       }
     }
   }
@@ -225,37 +231,70 @@ export function interact(
     positions[i * 2 + 1] = y;
   }
 
-  // Pass 4b: drop dead slots; recompute dominantBelief for rendering.
+  // Pass 4b: drop dead slots; resolve center conflicts (two beliefs sharing
+  // the same center can't coexist inside one agent — the weaker one is
+  // dropped); recompute dominantBelief for rendering.
+  const centersByBelief = registry.centers;
   for (let i = 0; i < count; i++) {
     if (!alive[i]) { dominantBelief[i] = 0; continue; }
     const base = i * stride;
+
+    // Drop near-zero slots first.
+    for (let k = 0; k < stride; k++) {
+      const id = beliefIds[base + k];
+      if (id === 0) continue;
+      if (credibilities[base + k] < BELIEF_DROP) {
+        beliefIds[base + k] = 0;
+        credibilities[base + k] = 0;
+      }
+    }
+
+    // Center conflict resolution: for each pair of surviving slots, if they
+    // share the same center, kill the weaker one.
+    for (let k = 0; k < stride; k++) {
+      const idK = beliefIds[base + k];
+      if (idK === 0) continue;
+      const cK = centersByBelief[idK - 1];
+      if (cK < 0) continue;
+      for (let m = k + 1; m < stride; m++) {
+        const idM = beliefIds[base + m];
+        if (idM === 0) continue;
+        if (centersByBelief[idM - 1] !== cK) continue;
+        // Same center in two slots → drop the weaker.
+        if (credibilities[base + k] >= credibilities[base + m]) {
+          beliefIds[base + m] = 0;
+          credibilities[base + m] = 0;
+        } else {
+          beliefIds[base + k] = 0;
+          credibilities[base + k] = 0;
+          break; // slot k is gone; move on
+        }
+      }
+    }
+
+    // Pick dominant active belief for rendering.
     let bestId = 0;
     let bestCred = ACTIVE_THRESHOLD - 1e-6;
     for (let k = 0; k < stride; k++) {
       const id = beliefIds[base + k];
       if (id === 0) continue;
       const c = credibilities[base + k];
-      if (c < BELIEF_DROP) {
-        beliefIds[base + k] = 0;
-        credibilities[base + k] = 0;
-        continue;
-      }
       if (c > bestCred) { bestCred = c; bestId = id; }
     }
     dominantBelief[i] = bestId;
   }
 
-  // Pass 4c: per-cell dominant belief (plurality over dominantBelief[agent]).
-  // Cheap: one pass over cells. Used by motion to steer crusaders.
+  // Pass 4c: per-cell dominant belief (Boyer–Moore plurality). Only walks
+  // non-empty cells. Used by tick() to steer crusaders toward enemy cells.
   if (dominantByCell.length < grid.cellCount) {
     dominantByCell = new Int32Array(grid.cellCount);
   } else {
     dominantByCell.fill(0, 0, grid.cellCount);
   }
-  // Two-pass plurality without a map: first pass builds a majority candidate
-  // with Boyer–Moore, second pass verifies. Works well when cells contain
-  // mostly agents of the same dominant belief (true for our clusters).
-  for (let c = 0; c < grid.cellCount; c++) {
+  const nonEmpty = grid.nonEmptyCells;
+  const neCount = grid.nonEmptyCount;
+  for (let t = 0; t < neCount; t++) {
+    const c = nonEmpty[t];
     const s = cellStart[c];
     const e = cellStart[c + 1];
     let cand = 0;
@@ -269,7 +308,7 @@ export function interact(
       else if (d === cand) cnt++;
       else cnt--;
     }
-    dominantByCell[c] = cand; // may be 0 (no believers) — fine
+    dominantByCell[c] = cand;
   }
 }
 
@@ -322,7 +361,19 @@ function pairInteract(
       credibilities[baseA + k] = newA;
       credibilities[baseB + bSlot] = newB;
 
+      // Loyalty enforcement — inside dense same-belief clusters, strong
+      // adherents re-indoctrinate backsliders. Too far gone → ejected.
+      if (newA >= ACTIVE_THRESHOLD && newB < LOYALTY_THRESHOLD
+          && sameBeliefNeighbours[a] >= LOYALTY_MIN_ALLIES) {
+        enforceLoyalty(state, a, b, bSlot, newB);
+      } else if (newB >= ACTIVE_THRESHOLD && newA < LOYALTY_THRESHOLD
+          && sameBeliefNeighbours[b] >= LOYALTY_MIN_ALLIES) {
+        enforceLoyalty(state, b, a, k, newA);
+      }
+
       if (credA >= SCHISM_MIN_CRED && credB >= SCHISM_MIN_CRED
+          && (sameBeliefNeighbours[a] >= SCHISM_MIN_ALLIES
+              || sameBeliefNeighbours[b] >= SCHISM_MIN_ALLIES)
           && rand() < SCHISM_PROB) {
         const childId = registry.schism(idA, rand);
         if (childId !== 0) {
@@ -424,6 +475,41 @@ function hash2(x: number, y: number, z: number): number {
   h = Math.imul(h, 0x846ca68b);
   h ^= h >>> 16;
   return (h >>> 0) / 4294967296;
+}
+
+function enforceLoyalty(
+  state: SimState,
+  enforcer: number,
+  backslider: number,
+  backsliderSlot: number,
+  currentCred: number,
+): void {
+  const stride = MAX_BELIEFS_PER_AGENT;
+  if (currentCred < HERETIC_CRED) {
+    // Too far gone — ejected. Positional push away from the enforcer.
+    const { positions } = state;
+    let dx = positions[backslider * 2] - positions[enforcer * 2];
+    let dy = positions[backslider * 2 + 1] - positions[enforcer * 2 + 1];
+    const half = WORLD_SIZE * 0.5;
+    if (dx > half) dx -= WORLD_SIZE;
+    else if (dx < -half) dx += WORLD_SIZE;
+    if (dy > half) dy -= WORLD_SIZE;
+    else if (dy < -half) dy += WORLD_SIZE;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d > 1e-6) {
+      const s = HERETIC_EJECT_PUSH / d;
+      pushX[backslider] += dx * s;
+      pushY[backslider] += dy * s;
+    }
+    // Also kill the shared belief slot — the heretic no longer holds it.
+    state.beliefIds[backslider * stride + backsliderSlot] = 0;
+    state.credibilities[backslider * stride + backsliderSlot] = 0;
+    return;
+  }
+  // Still recoverable — aggressive re-indoctrination.
+  const bumped = currentCred + LOYALTY_BUMP;
+  state.credibilities[backslider * stride + backsliderSlot] =
+    bumped > 1 ? 1 : bumped;
 }
 
 function pairSharesBelief(

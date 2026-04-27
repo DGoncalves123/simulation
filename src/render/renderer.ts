@@ -14,8 +14,8 @@ export interface Renderer {
   destroy(): void;
 }
 
-// Frame layout per agent: [x, y, beliefId] — 3 floats, stride 12 bytes.
-const FRAME_STRIDE = 12;
+// Frame layout per agent: [x, y, beliefId, origIndex] — 4 floats, stride 16 bytes.
+const FRAME_STRIDE = 16;
 
 export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const regl: Regl = createREGL({
@@ -112,7 +112,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   function drawFrame(frame: Float32Array, count: number, view: View): void {
     if (count === 0) return;
-    frameBuffer.subdata(frame.subarray(0, count * 3), 0);
+    frameBuffer.subdata(frame.subarray(0, count * 4), 0);
     regl.clear({ color: [0.06, 0.07, 0.09, 1], depth: 1 });
     const pointSize = Math.max(1.5, view.zoom * 0.6);
     draw({

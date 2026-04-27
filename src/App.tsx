@@ -41,7 +41,7 @@ export function App() {
     const send = (msg: MainToWorker, transfer?: Transferable[]) =>
       worker.postMessage(msg, transfer ?? []);
 
-    const bufBytes = 1_000_000 * 3 * 4;
+    const bufBytes = 1_000_000 * 4 * 4;
     const bufA = new ArrayBuffer(bufBytes);
     const bufB = new ArrayBuffer(bufBytes);
 
@@ -75,7 +75,7 @@ export function App() {
         if (pendingReturn) {
           send({ type: 'frameBuffer', buffer: pendingReturn }, [pendingReturn]);
         }
-        latestFrame = new Float32Array(msg.buffer, 0, msg.count * 3);
+        latestFrame = new Float32Array(msg.buffer, 0, msg.count * 4);
         latestCount = msg.count;
         pendingReturn = msg.buffer;
         tps = msg.tps;
@@ -108,6 +108,33 @@ export function App() {
       return { x: wx, y: wy };
     };
 
+    // Snap using the rendered-frame positions so the choice matches what the
+    // user sees. Returns the agent's original state index, or -1.
+    const snapAgainstFrame = (worldX: number, worldY: number, snapR: number): number => {
+      if (!latestFrame || latestCount === 0) return -1;
+      const r2 = snapR * snapR;
+      const halfW = WORLD_SIZE * 0.5;
+      let best = -1;
+      let bestD2 = Infinity;
+      for (let i = 0; i < latestCount; i++) {
+        const o = i * 4;
+        const belief = latestFrame[o + 2];
+        if (belief < 0.5) continue; // non-believers don't snap
+        let dx = latestFrame[o] - worldX;
+        let dy = latestFrame[o + 1] - worldY;
+        if (dx > halfW) dx -= WORLD_SIZE;
+        else if (dx < -halfW) dx += WORLD_SIZE;
+        if (dy > halfW) dy -= WORLD_SIZE;
+        else if (dy < -halfW) dy += WORLD_SIZE;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= r2 && d2 < bestD2) {
+          bestD2 = d2;
+          best = latestFrame[o + 3] | 0;
+        }
+      }
+      return best;
+    };
+
     const maybeQuery = () => {
       if (!mouseOverCanvas || dragging) return;
       const now = performance.now();
@@ -118,6 +145,7 @@ export function App() {
       const zoomCss = view.zoom / dpr;
       const worldRadius = HOVER_SCREEN_RADIUS_CSS / zoomCss;
       const worldSnapRadius = SNAP_SCREEN_RADIUS_CSS / zoomCss;
+      const snapped = snapAgainstFrame(x, y, worldSnapRadius);
       latestQueryId = nextQueryId++;
       send({
         type: 'query',
@@ -126,6 +154,7 @@ export function App() {
         radius: worldRadius,
         snapRadius: worldSnapRadius,
         limit: 0,
+        ...(snapped >= 0 ? { snappedAgent: snapped } : {}),
       });
     };
 

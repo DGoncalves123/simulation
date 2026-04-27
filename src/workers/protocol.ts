@@ -3,7 +3,18 @@ export type MainToWorker =
   | { type: 'start' }
   | { type: 'stop' }
   | { type: 'frameBuffer'; buffer: ArrayBuffer }
-  | { type: 'query'; id: number; x: number; y: number; radius: number; snapRadius: number; limit: number };
+  // Either provide a specific agent to inspect (snap already resolved on the
+  // main thread against the rendered frame), or an area query if not.
+  | {
+      type: 'query';
+      id: number;
+      x: number; y: number;
+      radius: number;
+      snapRadius: number;
+      limit: number;
+      // If set, worker skips its snap scan and returns this agent's beliefs.
+      snappedAgent?: number;
+    };
 
 export interface AgentBelief {
   id: number;

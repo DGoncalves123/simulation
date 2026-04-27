@@ -30,9 +30,9 @@ function post(msg: WorkerToMain, transfer?: Transferable[]): void {
   (self as unknown as Worker).postMessage(msg, { transfer: transfer ?? [] });
 }
 
-// Frame layout: for each live agent, 3 floats — x, y, beliefIdAsFloat.
-// (Storing uint32 as float is fine up to 2^24; we're far under.)
-// Dead slots are compacted out so the renderer doesn't draw corpses.
+// Frame layout: for each live agent, 4 floats — x, y, beliefIdAsFloat, origIndex.
+// (Storing uint32 as float is fine up to 2^24; agent count is far under.)
+// origIndex maps back to state.positions for snap queries from main thread.
 function snapshotInto(buffer: ArrayBuffer): number {
   if (!state) return 0;
   const dst = new Float32Array(buffer);
@@ -46,9 +46,10 @@ function snapshotInto(buffer: ArrayBuffer): number {
     dst[w] = positions[i * 2];
     dst[w + 1] = positions[i * 2 + 1];
     dst[w + 2] = dominant[i];
-    w += 3;
+    dst[w + 3] = i;
+    w += 4;
   }
-  return (w / 3) | 0;
+  return (w >>> 2);
 }
 
 function loop(): void {
@@ -73,7 +74,7 @@ function loop(): void {
 
   while (spareBuffers.length > 0) {
     const buf = spareBuffers[0];
-    if (buf.byteLength < state.count * 3 * 4) break;
+    if (buf.byteLength < state.live * 4 * 4) break;
     spareBuffers.shift();
     const count = snapshotInto(buf);
     post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps }, [buf]);
@@ -116,7 +117,13 @@ self.onmessage = (e: MessageEvent<MainToWorker>) => {
       break;
     }
     case 'query': {
-      post({ type: 'queryResult', result: runQuery(msg.id, msg.x, msg.y, msg.radius, msg.snapRadius, msg.limit) });
+      post({
+        type: 'queryResult',
+        result: runQuery(
+          msg.id, msg.x, msg.y, msg.radius, msg.snapRadius, msg.limit,
+          msg.snappedAgent,
+        ),
+      });
       break;
     }
   }
@@ -145,12 +152,27 @@ function agentBeliefList(i: number): AgentBelief[] {
 
 function runQuery(
   id: number, x: number, y: number, radius: number, snapRadius: number, limit: number,
+  snappedAgent?: number,
 ): QueryResult {
   const result: QueryResult = {
     id, worldX: x, worldY: y, radius,
     matchCount: 0, agent: null, tallies: [], nonReactionaryCount: 0,
   };
   if (!state || !grid) return result;
+
+  // Main thread already resolved a snap against the rendered frame — just
+  // return the beliefs of that specific agent (if still alive).
+  if (snappedAgent !== undefined && snappedAgent >= 0
+      && snappedAgent < state.count && state.alive[snappedAgent]) {
+    result.matchCount = 1;
+    result.agent = {
+      index: snappedAgent,
+      x: state.positions[snappedAgent * 2],
+      y: state.positions[snappedAgent * 2 + 1],
+      beliefs: agentBeliefList(snappedAgent),
+    };
+    return result;
+  }
 
   const half = WORLD_SIZE * 0.5;
   const r2 = radius * radius;
