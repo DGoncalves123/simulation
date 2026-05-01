@@ -33,12 +33,12 @@ export const BELIEF_DROP = 0.02;        // credibility below this → slot freed
 // Interaction deltas.
 export const REINFORCE_BUMP = 0.015;       // nominal boost when both agents hold the same belief
 export const SATURATION_BURN = 0.02;       // over-reinforcement penalty, scaled by cred²
-export const ADOPT_INITIAL = 0.22;         // starting credibility when adopted casually — below dormancy, requires reinforcement
+export const ADOPT_INITIAL = 0.18;         // casual seed — well below dormancy; requires later enforcement/reinforcement to activate
 export const ADOPT_NOISE = 0.1;            // +/- noise on adoption
-export const ENFORCE_BUMP = 0.28;          // active holder forces credibility on target — one contact leaves grey below dormancy
+export const ENFORCE_BUMP = 0.14;          // additive per contact — ~5 solo contacts to activate from grey; gang-up of 5 activates instantly
 export const ENFORCE_RESIST_FACTOR = 0.25; // target already active on another belief → enforcement reduced
 export const CONFLICT_DRAIN = 0.012;       // pushing against resistance costs the pusher some cred
-export const NEUTRALISE_DECAY = 0.025;     // per-tick decay when near a non-reactionary
+export const NEUTRALISE_DECAY = 0.022;     // per-tick decay when near a non-reactionary
 // Annihilation: when a believer is surrounded by mostly non-reactionaries
 // (outnumbered by ANNIHILATION_RATIO), their belief decays much faster —
 // the "crusade rides into an indifferent crowd and dissolves" effect.

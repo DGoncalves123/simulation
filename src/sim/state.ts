@@ -100,6 +100,27 @@ export function seedAgents(state: SimState, n: number, seed = 1): () => number {
   return rand;
 }
 
+// Additively bump credibility of a belief — used for enforcement so that
+// repeated contacts accumulate (0 → dormant → active) rather than stalling
+// at a floor. If already present, adds delta. If not present, inserts at delta.
+export function bumpBelief(
+  state: SimState,
+  agent: number,
+  beliefId: number,
+  delta: number,
+): boolean {
+  const stride = MAX_BELIEFS_PER_AGENT;
+  const base = agent * stride;
+  for (let k = 0; k < stride; k++) {
+    if (state.beliefIds[base + k] === beliefId) {
+      const nc = state.credibilities[base + k] + delta;
+      state.credibilities[base + k] = nc > 1 ? 1 : nc;
+      return true;
+    }
+  }
+  return upsertBelief(state, agent, beliefId, delta);
+}
+
 // Set (or raise) credibility of a belief in an agent's slot set.
 // If already present, take the max with newCredibility.
 // If not present, place in first free slot. If full, replace the weakest

@@ -14,7 +14,7 @@ import {
 } from './constants';
 import type { SpatialGrid } from './grid';
 import type { SimState } from './state';
-import { killAgent, upsertBelief } from './state';
+import { bumpBelief, killAgent, upsertBelief } from './state';
 
 let currentTick = 0;
 export function setInteractTick(t: number): void { currentTick = t; }
@@ -535,7 +535,7 @@ function pairInteract(
       // Reinforcements between two existing believers don't extend the chain.
       {
         const bWasGrey = !hasActive[b];
-        upsertBelief(state, b, idA, bump);
+        bumpBelief(state, b, idA, bump);
         if (bWasGrey) {
           state.convertedBy[b] = a + 1; state.convertedAtTick[b] = currentTick;
           emitEvent('enforce', idA, 0);
@@ -585,7 +585,7 @@ function pairInteract(
       if (aHoldsParent) bump += KIN_ADOPT_BONUS;
       {
         const aWasGrey = !hasActive[a];
-        upsertBelief(state, a, idB, bump);
+        bumpBelief(state, a, idB, bump);
         if (aWasGrey) {
           state.convertedBy[a] = b + 1; state.convertedAtTick[a] = currentTick;
           emitEvent('enforce', idB, 0);
