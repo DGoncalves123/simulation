@@ -52,7 +52,20 @@ export interface QueryResult {
   nonReactionaryCount: number;
 }
 
+export type SimEventKind = 'enforce' | 'fight' | 'schism' | 'fusion';
+
+export interface SimEvent {
+  tick: number;
+  kind: SimEventKind;
+  // The acting belief name (enforcer / winner / parent / fuser)
+  actorBelief: string;
+  // The receiving belief name (target / loser / child / fused)
+  targetBelief: string;
+  // How the actor group labels the target group — from targetBetween()
+  targetLabel: string;
+}
+
 export type WorkerToMain =
   | { type: 'ready'; count: number }
-  | { type: 'frame'; buffer: ArrayBuffer; count: number; live: number; tick: number; tps: number; enforcementDepth: number }
+  | { type: 'frame'; buffer: ArrayBuffer; count: number; live: number; tick: number; tps: number; enforcementDepth: number; events: SimEvent[] }
   | { type: 'queryResult'; result: QueryResult };

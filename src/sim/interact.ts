@@ -18,6 +18,56 @@ import { killAgent, upsertBelief } from './state';
 let currentTick = 0;
 export function setInteractTick(t: number): void { currentTick = t; }
 
+// Events emitted this tick — drained by the worker after each interact() call.
+export interface RawEvent {
+  tick: number;
+  kind: 'enforce' | 'fight' | 'schism' | 'fusion';
+  actorId: number;
+  targetId: number;
+  actorBelief: number;
+  targetBelief: number;
+}
+const eventBuf: RawEvent[] = [];
+// Separate slots per kind — fights/schisms/fusions always get through even if
+// enforce events are flooding. At most 1 enforce + 1 high-priority per tick.
+let tickHasFight = false;
+let tickHasSchism = false;
+let tickHasFusion = false;
+let tickEnforceCount = 0;
+let lastEnforceBeliefTick = -1;
+let lastEnforceBelief = 0;
+
+export function drainEvents(): RawEvent[] {
+  const out = eventBuf.slice();
+  eventBuf.length = 0;
+  tickHasFight = false;
+  tickHasSchism = false;
+  tickHasFusion = false;
+  tickEnforceCount = 0;
+  return out;
+}
+
+function emitEvent(kind: RawEvent['kind'], actorBelief: number, targetBelief: number): void {
+  if (kind === 'fight') {
+    if (tickHasFight) return;
+    tickHasFight = true;
+  } else if (kind === 'schism') {
+    if (tickHasSchism) return;
+    tickHasSchism = true;
+  } else if (kind === 'fusion') {
+    if (tickHasFusion) return;
+    tickHasFusion = true;
+  } else {
+    // enforce: deduplicate same belief in same tick, max 1 per tick
+    if (tickEnforceCount >= 1) return;
+    if (actorBelief === lastEnforceBelief && currentTick === lastEnforceBeliefTick) return;
+    tickEnforceCount++;
+    lastEnforceBelief = actorBelief;
+    lastEnforceBeliefTick = currentTick;
+  }
+  eventBuf.push({ tick: currentTick, kind, actorId: 0, targetId: 0, actorBelief, targetBelief });
+}
+
 let anyAboveDormancy: Uint8Array = new Uint8Array(0);
 let hasActive: Uint8Array = new Uint8Array(0);
 let nearNonReactionary: Uint8Array = new Uint8Array(0);
@@ -336,6 +386,9 @@ function pairInteract(
   // any belief above dormancy. Punctuated conflict, low per-tick probability.
   if (hasActive[a] && hasActive[b] && !pairSharesBelief(beliefIds, baseA, baseB, credibilities, stride)) {
     if (rand() < FIGHT_PROB) {
+      const { id: idA } = topActive(beliefIds, credibilities, baseA, stride);
+      const { id: idB } = topActive(beliefIds, credibilities, baseB, stride);
+      emitEvent('fight', idA, idB);
       resolveFight(state, a, b, rand);
       return; // fighters don't chat this tick
     }
@@ -349,6 +402,7 @@ function pairInteract(
         const swap = hash2(a, b, idA ^ idB) < 0.5;
         const fusedId = registry.fuseBeliefs(idA, idB, swap);
         if (fusedId !== 0 && fusedId !== idA && fusedId !== idB) {
+          emitEvent('fusion', idA, fusedId);
           // Both founders weakly adopt the syncretic belief; old beliefs untouched
           // (center-conflict resolution will drop the weaker same-center belief
           // next pass-4b anyway).
@@ -407,6 +461,7 @@ function pairInteract(
           && rand() < SCHISM_PROB) {
         const childId = registry.schism(idA, rand);
         if (childId !== 0) {
+          emitEvent('schism', idA, childId);
           const splinter = (hash2(a, b, idA) < 0.5) ? a : b;
           upsertBelief(state, splinter, childId, SCHISM_CHILD_CRED);
           const sBase = splinter * stride;
@@ -444,7 +499,10 @@ function pairInteract(
       {
         const bWasGrey = !hasActive[b];
         upsertBelief(state, b, idA, bump);
-        if (bWasGrey) { state.convertedBy[b] = a + 1; state.convertedAtTick[b] = currentTick; }
+        if (bWasGrey) {
+          state.convertedBy[b] = a + 1; state.convertedAtTick[b] = currentTick;
+          emitEvent('enforce', idA, 0);
+        }
       }
       if (resist < 1.0) {
         const nc = credA - CONFLICT_DRAIN;
@@ -491,7 +549,10 @@ function pairInteract(
       {
         const aWasGrey = !hasActive[a];
         upsertBelief(state, a, idB, bump);
-        if (aWasGrey) { state.convertedBy[a] = b + 1; state.convertedAtTick[a] = currentTick; }
+        if (aWasGrey) {
+          state.convertedBy[a] = b + 1; state.convertedAtTick[a] = currentTick;
+          emitEvent('enforce', idB, 0);
+        }
       }
       if (resist < 1.0) {
         const nc = credB - CONFLICT_DRAIN;

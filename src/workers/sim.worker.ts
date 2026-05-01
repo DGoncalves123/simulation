@@ -4,14 +4,14 @@ import {
 } from '../sim/constants';
 import { createBeliefRegistry, type BeliefRegistry } from '../sim/beliefs';
 import { SpatialGrid } from '../sim/grid';
-import { interact, setInteractTick } from '../sim/interact';
+import { interact, setInteractTick, drainEvents } from '../sim/interact';
 import { maybeInvent } from '../sim/invent';
 import { mulberry32 } from '../sim/rng';
 import { createState, seedAgents, type SimState } from '../sim/state';
 import { tick } from '../sim/tick';
 import { vital } from '../sim/vital';
 import type {
-  AgentBelief, BeliefTally, MainToWorker, QueryResult, WorkerToMain,
+  AgentBelief, BeliefTally, MainToWorker, QueryResult, SimEvent, WorkerToMain,
 } from './protocol';
 
 let state: SimState | null = null;
@@ -24,6 +24,9 @@ let lastStatsAt = 0;
 let ticksSinceStats = 0;
 let tps = 0;
 let enforcementDepth = 0;
+// Rolling buffer of recent events sent to main thread for the event log.
+const recentEvents: SimEvent[] = [];
+const MAX_LOG_EVENTS = 40;
 
 const spareBuffers: ArrayBuffer[] = [];
 
@@ -61,6 +64,14 @@ function loop(): void {
     grid.build(state);
     setInteractTick(tickCount);
     interact(state, grid, registry, simRand);
+    const rawEvts = drainEvents();
+    for (const e of rawEvts) {
+      const actor = registry.name(e.actorBelief) ?? `#${e.actorBelief}`;
+      const target = e.targetBelief > 0 ? (registry.name(e.targetBelief) ?? `#${e.targetBelief}`) : '';
+      const label = e.targetBelief > 0 ? registry.targetBetween(e.actorBelief, e.targetBelief) : '';
+      recentEvents.push({ tick: e.tick, kind: e.kind, actorBelief: actor, targetBelief: target, targetLabel: label });
+      if (recentEvents.length > MAX_LOG_EVENTS) recentEvents.shift();
+    }
     vital(state, grid, registry, simRand);
   }
   if (registry) maybeInvent(state, registry, simRand);
@@ -82,7 +93,7 @@ function loop(): void {
     if (buf.byteLength < state.live * 4 * 4) break;
     spareBuffers.shift();
     const count = snapshotInto(buf);
-    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps, enforcementDepth }, [buf]);
+    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps, enforcementDepth, events: recentEvents.slice() }, [buf]);
     break; // one frame per tick is enough
   }
 
