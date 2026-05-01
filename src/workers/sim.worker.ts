@@ -11,7 +11,7 @@ import { createState, seedAgents, type SimState } from '../sim/state';
 import { tick } from '../sim/tick';
 import { vital } from '../sim/vital';
 import type {
-  AgentBelief, BeliefTally, MainToWorker, QueryResult, SimEvent, WorkerToMain,
+  AgentBelief, BeliefTally, MainToWorker, QueryResult, SimEventSummary, WorkerToMain,
 } from './protocol';
 
 let state: SimState | null = null;
@@ -24,9 +24,11 @@ let lastStatsAt = 0;
 let ticksSinceStats = 0;
 let tps = 0;
 let enforcementDepth = 0;
-// Rolling buffer of recent events sent to main thread for the event log.
-const recentEvents: SimEvent[] = [];
-const MAX_LOG_EVENTS = 40;
+
+// Event accumulation: bucket raw events by kind+actor+target, flush once/sec.
+const eventBuckets = new Map<string, SimEventSummary>();
+let lastEventFlushAt = 0;
+let pendingEventSummaries: SimEventSummary[] | null = null;
 
 const spareBuffers: ArrayBuffer[] = [];
 
@@ -69,8 +71,14 @@ function loop(): void {
       const actor = registry.name(e.actorBelief) ?? `#${e.actorBelief}`;
       const target = e.targetBelief > 0 ? (registry.name(e.targetBelief) ?? `#${e.targetBelief}`) : '';
       const label = e.targetBelief > 0 ? registry.targetBetween(e.actorBelief, e.targetBelief) : '';
-      recentEvents.push({ tick: e.tick, kind: e.kind, actorBelief: actor, targetBelief: target, targetLabel: label });
-      if (recentEvents.length > MAX_LOG_EVENTS) recentEvents.shift();
+      const key = `${e.kind}\x00${actor}\x00${target}`;
+      const existing = eventBuckets.get(key);
+      if (existing) {
+        existing.count++;
+        existing.lastTick = e.tick;
+      } else {
+        eventBuckets.set(key, { kind: e.kind, actorBelief: actor, targetBelief: target, targetLabel: label, count: 1, lastTick: e.tick });
+      }
     }
     vital(state, grid, registry, simRand);
   }
@@ -88,12 +96,22 @@ function loop(): void {
     lastStatsAt = now;
   }
 
+  // Flush event summaries once per second. Sort by count desc, keep top 8.
+  if (now - lastEventFlushAt >= 1000 && eventBuckets.size > 0) {
+    const summaries = Array.from(eventBuckets.values());
+    summaries.sort((a, b) => b.count - a.count);
+    pendingEventSummaries = summaries.slice(0, 8);
+    eventBuckets.clear();
+    lastEventFlushAt = now;
+  }
+
   while (spareBuffers.length > 0) {
     const buf = spareBuffers[0];
     if (buf.byteLength < state.live * 4 * 4) break;
     spareBuffers.shift();
     const count = snapshotInto(buf);
-    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps, enforcementDepth, events: recentEvents.slice() }, [buf]);
+    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps, enforcementDepth, events: pendingEventSummaries }, [buf]);
+    pendingEventSummaries = null;
     break; // one frame per tick is enough
   }
 

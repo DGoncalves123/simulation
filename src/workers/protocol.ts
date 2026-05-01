@@ -55,18 +55,18 @@ export interface QueryResult {
 
 export type SimEventKind = 'enforce' | 'fight' | 'schism' | 'fusion';
 
-export interface SimEvent {
-  tick: number;
+// A summary of all events of a given kind+belief-pair that occurred during
+// the most recent ~1-second accumulation window.
+export interface SimEventSummary {
   kind: SimEventKind;
-  // The acting belief name (enforcer / winner / parent / fuser)
   actorBelief: string;
-  // The receiving belief name (target / loser / child / fused)
   targetBelief: string;
-  // How the actor group labels the target group — from targetBetween()
   targetLabel: string;
+  count: number;
+  lastTick: number;
 }
 
 export type WorkerToMain =
   | { type: 'ready'; count: number }
-  | { type: 'frame'; buffer: ArrayBuffer; count: number; live: number; tick: number; tps: number; enforcementDepth: number; events: SimEvent[] }
+  | { type: 'frame'; buffer: ArrayBuffer; count: number; live: number; tick: number; tps: number; enforcementDepth: number; events: SimEventSummary[] | null }
   | { type: 'queryResult'; result: QueryResult };

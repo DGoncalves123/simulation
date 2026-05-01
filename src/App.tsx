@@ -4,7 +4,7 @@ import { createRenderer, type View } from './render/renderer';
 import { attachPanZoom } from './render/controls';
 import { Tooltip } from './ui/Tooltip';
 import { EventLog } from './ui/EventLog';
-import type { MainToWorker, QueryResult, SimEvent, WorkerToMain } from './workers/protocol';
+import type { MainToWorker, QueryResult, SimEventSummary, WorkerToMain } from './workers/protocol';
 
 const HOVER_SCREEN_RADIUS_CSS = 16; // CSS pixels — group aggregation radius
 const SNAP_SCREEN_RADIUS_CSS = 36; // CSS pixels — how far the cursor will snap to a believer
@@ -19,7 +19,7 @@ export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stats, setStats] = useState({ fps: 0, tps: 0, count: 0, tick: 0, depth: 0 });
   const [hover, setHover] = useState<HoverState | null>(null);
-  const [events, setEvents] = useState<SimEvent[]>([]);
+  const [events, setEvents] = useState<SimEventSummary[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -84,7 +84,7 @@ export function App() {
         tps = msg.tps;
         tick = msg.tick;
         depth = msg.enforcementDepth;
-        if (msg.events.length > 0) setEvents(msg.events.slice(-40));
+        if (msg.events) setEvents(msg.events);
       } else if (msg.type === 'queryResult') {
         if (msg.result.id !== latestQueryId) return; // stale
         if (!mouseOverCanvas || dragging) return;
