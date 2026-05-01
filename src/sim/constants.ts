@@ -78,9 +78,9 @@ export const ENERGY_FRIEND_CAP = 10;           // diminishing returns past this 
 // Range is a bit larger than the inter-agent spacing inside a saturated
 // cell so there's always some pressure to spread — agents never fully
 // settle into a static wall.
-export const REPULSION_RADIUS = 2.8;           // world units
-export const REPULSION_STRENGTH = 0.9;         // push magnitude at centre
-export const REPULSION_MAX_PUSH = 1.5;         // per-tick displacement cap
+export const REPULSION_RADIUS = 3.5;           // world units
+export const REPULSION_STRENGTH = 1.1;         // push magnitude at centre
+export const REPULSION_MAX_PUSH = 1.8;         // per-tick displacement cap
 
 // Cap pair-interaction cost. Each initiator processes at most this many
 // neighbours per tick, bounding the hot loop regardless of cluster density.
@@ -90,8 +90,8 @@ export const MAX_PAIR_VISITS = 14;
 // population churn without requiring starvation. Also scales up with cell
 // crowding: crowded cells turn over faster, which prevents blob explosions.
 export const DEATH_FROM_AGE_PROB = 0.0005;       // ~2000-tick expected lifespan
-export const DEATH_FROM_CROWD_PROB = 0.0004;     // per cell-mate over threshold — punishes crowd walls
-export const DEATH_CROWD_THRESHOLD = 7;          // harmless up to this count; scales above
+export const DEATH_FROM_CROWD_PROB = 0.0006;     // per cell-mate over threshold — punishes crowd walls
+export const DEATH_CROWD_THRESHOLD = 5;          // harmless up to this count; scales above
 
 // Reproduction. Any agent with enough energy AND at least one cell-mate
 // can reproduce. Rate is tuned to balance DEATH_FROM_AGE_PROB at small
@@ -102,13 +102,13 @@ export const REPRO_PROB_PER_NEIGHBOUR = 0.0022;   // per any cell-mate
 export const REPRO_MAX_PROB = 0.03;
 // Hard ecological ceiling — lower than current prod to keep population
 // around a TPS-friendly ~30k at equilibrium instead of runaway.
-export const REPRO_CELL_CARRYING_CAPACITY = 12;
+export const REPRO_CELL_CARRYING_CAPACITY = 8;
 export const REPRO_PARENT_ENERGY_AFTER = 0.3;  // parent drops low after repro
 export const CHILD_INIT_ENERGY = 0.3;          // child starts low
 export const CHILD_INHERIT_PROB = 0.5;         // per parent-belief, chance child gets it
 export const CHILD_CRED_FACTOR = 0.6;          // child's credibility = parent's × this
 export const CHILD_MUTATION_PROB = 0.03;       // per inherited belief, chance to schism
-export const CHILD_SPAWN_OFFSET = 10.0;        // world units from parent — 1-2 cells out so clumps project outward each generation
+export const CHILD_SPAWN_OFFSET = 5.0;         // world units from parent
 
 // Spontaneous invention: per-tick probability the simulation picks a random
 // agent to invent a fully-formed (active) new belief. Kept very low so a
@@ -122,8 +122,8 @@ export const SPONTANEOUS_INITIAL_CRED = 0.85; // new inventor starts active
 // belief and marches toward it. No explicit coordination — every zealot in
 // the cluster sees the same enemy and independently heads there, producing
 // block movement by convergence.
-export const CRUSADE_ALLY_THRESHOLD = 5;     // same-belief cellmates needed to go crusader
-export const CRUSADE_SIGHT_CELLS = 12;       // how many grid cells out to scan for enemies (≈ 96 world units)
+export const CRUSADE_ALLY_THRESHOLD = 4;     // same-belief cellmates needed to go crusader
+export const CRUSADE_SIGHT_CELLS = 20;       // how many grid cells out to scan for enemies (≈ 160 world units)
 export const CRUSADE_SEEK_PROB = 0.75;       // when a crusader moves, chance it's a crusade seek (vs wander)
 export const CRUSADE_PROBES = 8;             // kept for signature compat (unused in deterministic scan)
 
