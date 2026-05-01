@@ -35,10 +35,10 @@ export const REINFORCE_BUMP = 0.015;       // nominal boost when both agents hol
 export const SATURATION_BURN = 0.02;       // over-reinforcement penalty, scaled by cred²
 export const ADOPT_INITIAL = 0.35;         // starting credibility when adopted casually — high enough to spread fast
 export const ADOPT_NOISE = 0.1;            // +/- noise on adoption
-export const ENFORCE_BUMP = 0.6;           // active holder forces credibility on target
+export const ENFORCE_BUMP = 0.45;          // active holder forces credibility on target
 export const ENFORCE_RESIST_FACTOR = 0.25; // target already active on another belief → enforcement reduced
 export const CONFLICT_DRAIN = 0.012;       // pushing against resistance costs the pusher some cred
-export const NEUTRALISE_DECAY = 0.008;     // per-tick decay when near a non-reactionary — gentle enough that conversion beats neutralisation
+export const NEUTRALISE_DECAY = 0.018;     // per-tick decay when near a non-reactionary — grey agents push back
 
 // Lineage / schism. Only large, saturated clusters schism — a belief
 // doesn't fracture unless it has enough followers to support a rival sect.
@@ -105,7 +105,7 @@ export const REPRO_MAX_PROB = 0.03;
 export const REPRO_CELL_CARRYING_CAPACITY = 8;
 export const REPRO_PARENT_ENERGY_AFTER = 0.3;  // parent drops low after repro
 export const CHILD_INIT_ENERGY = 0.3;          // child starts low
-export const CHILD_INHERIT_PROB = 0.5;         // per parent-belief, chance child gets it
+export const CHILD_INHERIT_PROB = 0.35;        // per parent-belief, chance child gets it — lower keeps grey substrate alive
 export const CHILD_CRED_FACTOR = 0.6;          // child's credibility = parent's × this
 export const CHILD_MUTATION_PROB = 0.03;       // per inherited belief, chance to schism
 export const CHILD_SPAWN_OFFSET = 5.0;         // world units from parent
@@ -114,7 +114,7 @@ export const CHILD_SPAWN_OFFSET = 5.0;         // world units from parent
 // agent to invent a fully-formed (active) new belief. Kept very low so a
 // handful of cults compete for the whole world, instead of thousands of
 // one-cell islands that never meet each other.
-export const SPONTANEOUS_INVENT_PROB = 0.008;
+export const SPONTANEOUS_INVENT_PROB = 0.004;  // rare — a handful of cults, not dozens
 export const SPONTANEOUS_INITIAL_CRED = 0.85; // new inventor starts active
 
 // Syncretism / belief fusion. When two agents holding different active beliefs
@@ -147,6 +147,6 @@ export const FIGHT_PROB = 0.05;
 export const FIGHT_ALLY_BONUS = 0.08;           // each same-belief cellmate multiplies strength by (1 + this)
 export const FIGHT_ENERGY_COST_WINNER = 0.06;
 export const FIGHT_ENERGY_COST_LOSER = 0.2;
-export const FIGHT_LOSER_CRED_HIT = 0.55;       // how much credibility the loser's active belief loses
-export const FIGHT_CONVERT_CRED = 0.5;          // winner's belief is installed on loser at this credibility
+export const FIGHT_LOSER_CRED_HIT = 0.7;        // loser's belief crashes hard — fragments scatter carrying dormant infection
+export const FIGHT_CONVERT_CRED = 0.45;         // winner's belief installed on loser at sub-active cred — dormant infection
 export const FIGHT_DEATH_ENERGY = 0.05;         // if post-fight energy below this, loser dies now

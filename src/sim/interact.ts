@@ -603,8 +603,31 @@ function resolveFight(
   }
   energies[loser] = le;
 
-  // Forced conversion at swordpoint — winner's belief installed on loser.
+  // Forced conversion at swordpoint — winner's belief installed on loser at
+  // sub-active credibility so it's a *dormant infection*, not instant conversion.
   upsertBelief(state, loser, winnerId, FIGHT_CONVERT_CRED);
+
+  // Scatter push — loser flees away from winner, carrying the dormant belief.
+  // This produces the "fragment + spread dormant infection" pattern from the spec.
+  {
+    const { positions } = state;
+    let dx = positions[loser * 2] - positions[winner * 2];
+    let dy = positions[loser * 2 + 1] - positions[winner * 2 + 1];
+    const half = WORLD_SIZE * 0.5;
+    if (dx > half) dx -= WORLD_SIZE; else if (dx < -half) dx += WORLD_SIZE;
+    if (dy > half) dy -= WORLD_SIZE; else if (dy < -half) dy += WORLD_SIZE;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    const scatter = 4.0;
+    if (d > 1e-6) {
+      pushX[loser] += (dx / d) * scatter;
+      pushY[loser] += (dy / d) * scatter;
+    } else {
+      // Same cell — push in random-ish direction using hash
+      const h = hash2(loser, winner, 0);
+      pushX[loser] += Math.cos(h * Math.PI * 2) * scatter;
+      pushY[loser] += Math.sin(h * Math.PI * 2) * scatter;
+    }
+  }
 
   // Winner's belief mildly reinforced from victory.
   const winnerBase = winner * stride;
