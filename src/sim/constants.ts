@@ -117,6 +117,13 @@ export const CHILD_SPAWN_OFFSET = 5.0;         // world units from parent
 export const SPONTANEOUS_INVENT_PROB = 0.008;
 export const SPONTANEOUS_INITIAL_CRED = 0.85; // new inventor starts active
 
+// Syncretism / belief fusion. When two agents holding different active beliefs
+// from different centers meet repeatedly, a hybrid belief can emerge that
+// combines one's center with the other's frame. Rare — rarer than schism.
+export const FUSION_PROB = 0.0003;        // per differing-belief pair per tick
+export const FUSION_MIN_CRED = 0.75;      // both agents must be at least this credible
+export const FUSION_CRED = 0.65;          // credibility the two founders get in the new belief
+
 // Crusade. An agent surrounded by many same-belief allies starts looking
 // beyond their immediate cell for a nearby cluster of a DIFFERENT active
 // belief and marches toward it. No explicit coordination — every zealot in

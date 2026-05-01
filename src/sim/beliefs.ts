@@ -55,6 +55,10 @@ export interface BeliefRegistry {
   // rendering interactions between *different* beliefs.
   targetBetween(ownId: number, otherId: number): string;
   schism(parentId: number, rand: () => number): number;
+  // Syncretism: take center from idA, frame from idB (or vice versa via swap).
+  // Returns the new/existing syncretic belief ID, or 0 if the pairing cap
+  // would be exceeded or both beliefs lack known parts.
+  fuseBeliefs(idA: number, idB: number, swap: boolean): number;
   parentOf(beliefId: number): number;
   readonly parents: number[];
   // centers[id-1] = CENTERS index, or -1 if the belief was externally interned.
@@ -71,6 +75,7 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
   const names: string[] = [];
   const parents: number[] = []; // parents[id-1] = parent id or 0
   const centerIdxById: number[] = []; // centerIdxById[id-1] = CENTERS index
+  const frameIdxById: number[] = [];  // frameIdxById[id-1] = FRAMES index
   const childCounts: number[] = []; // childCounts[id-1] = schisms spawned from this belief
   // Frame → set of centerIdx that have already paired with this frame.
   // Frame is allowed to pair with a new center only while its set size is
@@ -100,9 +105,10 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
     parents.push(parent);
     const cIdx = CENTERS.indexOf(center);
     centerIdxById.push(cIdx);
+    const fIdx = FRAMES.indexOf(frame);
+    frameIdxById.push(fIdx);
     childCounts.push(0);
     if (parent > 0) childCounts[parent - 1]++;
-    const fIdx = FRAMES.indexOf(frame);
     if (cIdx >= 0 && fIdx >= 0) recordPair(cIdx, fIdx);
     return id;
   }
@@ -132,6 +138,7 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
       names.push(name);
       parents.push(0);
       centerIdxById.push(-1);
+      frameIdxById.push(-1);
       childCounts.push(0);
       return id;
     },
@@ -170,6 +177,14 @@ export function createBeliefRegistry(rand: () => number): BeliefRegistry {
         }
       }
       return 0; // no new variant available this time
+    },
+    fuseBeliefs(idA: number, idB: number, swap: boolean): number {
+      // Syncretism: center from one belief + frame from the other.
+      const cIdx = centerIdxById[(swap ? idB : idA) - 1];
+      const fIdx = frameIdxById[(swap ? idA : idB) - 1];
+      if (cIdx < 0 || fIdx < 0) return 0;
+      if (!pairIsAllowed(cIdx, fIdx)) return 0;
+      return internWithParts(CENTERS[cIdx], FRAMES[fIdx], 0);
     },
     parentOf(beliefId: number): number {
       if (beliefId <= 0 || beliefId > names.length) return 0;

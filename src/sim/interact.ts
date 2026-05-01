@@ -4,11 +4,12 @@ import {
   CONFLICT_DRAIN, DORMANCY_THRESHOLD, ENFORCE_BUMP, ENFORCE_RESIST_FACTOR,
   FIGHT_ALLY_BONUS, FIGHT_CONVERT_CRED, FIGHT_DEATH_ENERGY,
   FIGHT_ENERGY_COST_LOSER, FIGHT_ENERGY_COST_WINNER, FIGHT_LOSER_CRED_HIT,
-  FIGHT_PROB, HERETIC_CRED, HERETIC_EJECT_PUSH, KIN_ADOPT_BONUS,
-  LOYALTY_BUMP, LOYALTY_MIN_ALLIES, LOYALTY_THRESHOLD, MAX_PAIR_VISITS,
-  MAX_BELIEFS_PER_AGENT, NEUTRALISE_DECAY, REINFORCE_BUMP, REPULSION_MAX_PUSH,
-  REPULSION_RADIUS, REPULSION_STRENGTH, SATURATION_BURN, SCHISM_CHILD_CRED,
-  SCHISM_MIN_ALLIES, SCHISM_MIN_CRED, SCHISM_PROB, WORLD_SIZE,
+  FIGHT_PROB, FUSION_CRED, FUSION_MIN_CRED, FUSION_PROB, HERETIC_CRED,
+  HERETIC_EJECT_PUSH, KIN_ADOPT_BONUS, LOYALTY_BUMP, LOYALTY_MIN_ALLIES,
+  LOYALTY_THRESHOLD, MAX_PAIR_VISITS, MAX_BELIEFS_PER_AGENT, NEUTRALISE_DECAY,
+  REINFORCE_BUMP, REPULSION_MAX_PUSH, REPULSION_RADIUS, REPULSION_STRENGTH,
+  SATURATION_BURN, SCHISM_CHILD_CRED, SCHISM_MIN_ALLIES, SCHISM_MIN_CRED,
+  SCHISM_PROB, WORLD_SIZE,
 } from './constants';
 import type { SpatialGrid } from './grid';
 import type { SimState } from './state';
@@ -331,6 +332,29 @@ function pairInteract(
     if (rand() < FIGHT_PROB) {
       resolveFight(state, a, b, rand);
       return; // fighters don't chat this tick
+    }
+    // Syncretism — when two believers of different active beliefs meet
+    // peacefully (no fight this tick), a rare chance to fuse their beliefs into
+    // a hybrid that borrows one's center and the other's frame.
+    if (rand() < FUSION_PROB) {
+      const { slot: slotA, id: idA, cred: credA } = topActive(beliefIds, credibilities, baseA, stride);
+      const { slot: slotB, id: idB, cred: credB } = topActive(beliefIds, credibilities, baseB, stride);
+      if (credA >= FUSION_MIN_CRED && credB >= FUSION_MIN_CRED && idA !== idB) {
+        const swap = hash2(a, b, idA ^ idB) < 0.5;
+        const fusedId = registry.fuseBeliefs(idA, idB, swap);
+        if (fusedId !== 0 && fusedId !== idA && fusedId !== idB) {
+          // Both founders weakly adopt the syncretic belief; old beliefs untouched
+          // (center-conflict resolution will drop the weaker same-center belief
+          // next pass-4b anyway).
+          upsertBelief(state, a, fusedId, FUSION_CRED);
+          upsertBelief(state, b, fusedId, FUSION_CRED);
+          // Old beliefs take a credibility hit from the schism of attention.
+          const newCredA = credibilities[baseA + slotA] - 0.1;
+          credibilities[baseA + slotA] = newCredA < 0 ? 0 : newCredA;
+          const newCredB = credibilities[baseB + slotB] - 0.1;
+          credibilities[baseB + slotB] = newCredB < 0 ? 0 : newCredB;
+        }
+      }
     }
   }
 
