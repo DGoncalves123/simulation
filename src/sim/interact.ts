@@ -1,7 +1,8 @@
 import type { BeliefRegistry } from './beliefs';
 import {
-  ACTIVE_THRESHOLD, ADOPT_INITIAL, ADOPT_NOISE, BELIEF_DROP, COMM_RADIUS,
-  CONFLICT_DRAIN, DORMANCY_THRESHOLD, ENFORCE_BUMP, ENFORCE_RESIST_FACTOR,
+  ACTIVE_THRESHOLD, ADOPT_INITIAL, ADOPT_NOISE, ANNIHILATION_DECAY,
+  ANNIHILATION_RATIO, BELIEF_DROP, COMM_RADIUS, CONFLICT_DRAIN,
+  DORMANCY_THRESHOLD, ENFORCE_BUMP, ENFORCE_RESIST_FACTOR,
   FIGHT_ALLY_BONUS, FIGHT_CONVERT_CRED, FIGHT_DEATH_ENERGY,
   FIGHT_ENERGY_COST_LOSER, FIGHT_ENERGY_COST_WINNER, FIGHT_LOSER_CRED_HIT,
   FIGHT_PROB, FUSION_CRED, FUSION_MIN_CRED, FUSION_PROB, HERETIC_CRED,
@@ -48,6 +49,7 @@ export function drainEvents(): RawEvent[] {
 }
 
 function emitEvent(kind: RawEvent['kind'], actorBelief: number, targetBelief: number): void {
+  if (actorBelief === 0) return; // no-belief sentinel — skip
   if (kind === 'fight') {
     if (tickHasFight) return;
     tickHasFight = true;
@@ -157,12 +159,17 @@ export function interact(
   // Pass 2: initiator-driven pair interactions.
   // Inlined grid cell scan — a callback here is called ~9×initCount times
   // and its overhead dominates the hot loop at high belief prevalence.
+  // Cap at 20k initiators per tick to keep cost bounded at high populations.
+  // Shuffling is too expensive; we just take the first N which is unbiased
+  // over time because agent order changes as they die/spawn.
+  const MAX_INITIATORS = 20000;
+  const activeInitCount = initCount > MAX_INITIATORS ? MAX_INITIATORS : initCount;
   const cellsPerAxis = grid.cellsPerAxis;
   const cellSize = grid.cellSize;
   const cellStart = grid.cellStart;
   const agentIdx = grid.agentIdx;
 
-  for (let t = 0; t < initCount; t++) {
+  for (let t = 0; t < activeInitCount; t++) {
     const i = initiators[t];
     const ix = positions[i * 2];
     const iy = positions[i * 2 + 1];
@@ -218,10 +225,9 @@ export function interact(
     }
   }
 
-  // Pass 3a: non-reactionary repulsion — a cheap, capped scan. Only runs
+  // Pass 3a: non-reactionary repulsion — cheap, capped scan. Only runs
   // for agents that weren't initiators (those already got repulsion above).
-  // Each non-reactionary probes a handful of cell-mates and pushes apart if
-  // too close. No belief logic, no allocations.
+  // Skip cells with ≤1 occupant — nothing to repel from.
   for (let i = 0; i < count; i++) {
     if (!alive[i] || anyAboveDormancy[i]) continue;
     const ix = positions[i * 2];
@@ -231,8 +237,9 @@ export function interact(
     const cIdx = cy * cellsPerAxis + cx;
     const s = cellStart[cIdx];
     const e = cellStart[cIdx + 1];
-    // Probe up to 6 cell-mates. Cluster-local only — no 9-cell scan.
-    const bound = Math.min(e, s + 6);
+    if (e - s <= 1) continue; // alone in cell — skip entirely
+    // Probe up to 3 cell-mates. Cluster-local only — no 9-cell scan.
+    const bound = Math.min(e, s + 3);
     for (let kk = s; kk < bound; kk++) {
       const j = agentIdx[kk];
       if (j === i || !alive[j]) continue;
@@ -255,13 +262,43 @@ export function interact(
 
   // Pass 3b: global relaxation — any agent flagged as near a non-reactionary
   // decays ALL of their beliefs slightly.
-  for (let t = 0; t < initCount; t++) {
+  for (let t = 0; t < activeInitCount; t++) {
     const i = initiators[t];
     if (!nearNonReactionary[i]) continue;
     const base = i * stride;
     for (let k = 0; k < stride; k++) {
       if (beliefIds[base + k] === 0) continue;
       credibilities[base + k] = Math.max(0, credibilities[base + k] - NEUTRALISE_DECAY);
+    }
+  }
+
+  // Pass 3c: annihilation — a believer outnumbered by grey neighbours in their
+  // cell has ALL beliefs decayed sharply. Models a crusading cluster dissolving
+  // when it marches into a large indifferent population (spec: "self-annihilation
+  // possible" for crusades hitting a mass of non-reactionaries).
+  for (let t = 0; t < activeInitCount; t++) {
+    const i = initiators[t];
+    const ix = positions[i * 2];
+    const iy = positions[i * 2 + 1];
+    const cx2 = (ix / cellSize) | 0;
+    const cy2 = (iy / cellSize) | 0;
+    const cIdx2 = cy2 * cellsPerAxis + cx2;
+    const s2 = cellStart[cIdx2];
+    const e2 = cellStart[cIdx2 + 1];
+    const cellPop2 = e2 - s2;
+    if (cellPop2 < 3) continue;
+    let greyCount = 0;
+    for (let kk = s2; kk < e2; kk++) {
+      const j = agentIdx[kk];
+      if (j !== i && alive[j] && !anyAboveDormancy[j]) greyCount++;
+    }
+    if (greyCount / cellPop2 >= ANNIHILATION_RATIO) {
+      const base = i * stride;
+      for (let k = 0; k < stride; k++) {
+        if (beliefIds[base + k] === 0) continue;
+        const nc = credibilities[base + k] - ANNIHILATION_DECAY * greyCount;
+        credibilities[base + k] = nc < 0 ? 0 : nc;
+      }
     }
   }
 

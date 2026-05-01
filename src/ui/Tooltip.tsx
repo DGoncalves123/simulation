@@ -1,5 +1,11 @@
 import type { QueryResult } from '../workers/protocol';
 
+function energyColor(e: number): string {
+  if (e >= 0.7) return '#7cf07c';
+  if (e >= 0.4) return '#f0d07c';
+  return '#f07c7c';
+}
+
 interface Props {
   screenX: number;
   screenY: number;
@@ -36,8 +42,10 @@ export function Tooltip({ screenX, screenY, result }: Props) {
     const a = result.agent;
     return (
       <div style={style}>
-        <div style={{ opacity: 0.6, marginBottom: 4 }}>
-          Agent #{a.index} · ({a.x.toFixed(1)}, {a.y.toFixed(1)})
+        <div style={{ opacity: 0.6, marginBottom: 4, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <span>Agent #{a.index}</span>
+          <span>({a.x.toFixed(1)}, {a.y.toFixed(1)})</span>
+          <span style={{ color: energyColor(a.energy) }}>⚡ {(a.energy * 100).toFixed(0)}%</span>
         </div>
         {a.beliefs.length === 0 ? (
           <div style={{ opacity: 0.7 }}>no beliefs (non-reactionary)</div>

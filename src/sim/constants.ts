@@ -1,10 +1,10 @@
 export const WORLD_SIZE = 2000;
-export const INITIAL_AGENTS = 8000;
+export const INITIAL_AGENTS = 15000;
 export const MAX_AGENTS = 1_000_000;
 // Soft target: reproduction is blocked globally when live population
 // exceeds this. Keeps the sim at a TPS where behaviours are visible in
 // real time. Raise when we port hot loops to WASM.
-export const POPULATION_BUDGET = 20000;
+export const POPULATION_BUDGET = 50000;
 export const MAX_BELIEFS_PER_AGENT = 8;
 export const COMM_RADIUS = 8;
 export const MAX_SPEED = 0.6;
@@ -33,18 +33,23 @@ export const BELIEF_DROP = 0.02;        // credibility below this → slot freed
 // Interaction deltas.
 export const REINFORCE_BUMP = 0.015;       // nominal boost when both agents hold the same belief
 export const SATURATION_BURN = 0.02;       // over-reinforcement penalty, scaled by cred²
-export const ADOPT_INITIAL = 0.35;         // starting credibility when adopted casually — high enough to spread fast
+export const ADOPT_INITIAL = 0.22;         // starting credibility when adopted casually — below dormancy, requires reinforcement
 export const ADOPT_NOISE = 0.1;            // +/- noise on adoption
-export const ENFORCE_BUMP = 0.45;          // active holder forces credibility on target
+export const ENFORCE_BUMP = 0.28;          // active holder forces credibility on target — one contact leaves grey below dormancy
 export const ENFORCE_RESIST_FACTOR = 0.25; // target already active on another belief → enforcement reduced
 export const CONFLICT_DRAIN = 0.012;       // pushing against resistance costs the pusher some cred
-export const NEUTRALISE_DECAY = 0.018;     // per-tick decay when near a non-reactionary — grey agents push back
+export const NEUTRALISE_DECAY = 0.025;     // per-tick decay when near a non-reactionary
+// Annihilation: when a believer is surrounded by mostly non-reactionaries
+// (outnumbered by ANNIHILATION_RATIO), their belief decays much faster —
+// the "crusade rides into an indifferent crowd and dissolves" effect.
+export const ANNIHILATION_RATIO = 0.7;    // fraction of cell that must be grey to trigger
+export const ANNIHILATION_DECAY = 0.04;   // extra decay per grey neighbour (on top of NEUTRALISE_DECAY)
 
 // Lineage / schism. Only large, saturated clusters schism — a belief
 // doesn't fracture unless it has enough followers to support a rival sect.
 // And a belief can only produce so many children before it's "done" —
 // otherwise any sustained cult generates infinite variants.
-export const SCHISM_PROB = 0.0008;         // per mutual-reinforce pair per tick
+export const SCHISM_PROB = 0.00016;        // per mutual-reinforce pair per tick — scaled for ~100k density
 export const SCHISM_MIN_CRED = 0.8;        // both agents must be at least this credible to schism
 export const SCHISM_MIN_ALLIES = 8;        // at least one side must have this many same-belief cellmates
 export const SCHISM_CHILD_CRED = 0.82;     // credibility after schism in the splintering agent
@@ -84,14 +89,14 @@ export const REPULSION_MAX_PUSH = 1.8;         // per-tick displacement cap
 
 // Cap pair-interaction cost. Each initiator processes at most this many
 // neighbours per tick, bounding the hot loop regardless of cluster density.
-export const MAX_PAIR_VISITS = 14;
+export const MAX_PAIR_VISITS = 8;
 
 // Old-age death: bounded lifespan. Primary death mechanism — ensures
 // population churn without requiring starvation. Also scales up with cell
 // crowding: crowded cells turn over faster, which prevents blob explosions.
 export const DEATH_FROM_AGE_PROB = 0.0005;       // ~2000-tick expected lifespan
-export const DEATH_FROM_CROWD_PROB = 0.0006;     // per cell-mate over threshold — punishes crowd walls
-export const DEATH_CROWD_THRESHOLD = 5;          // harmless up to this count; scales above
+export const DEATH_FROM_CROWD_PROB = 0.0008;     // per cell-mate over threshold — punishes crowd walls
+export const DEATH_CROWD_THRESHOLD = 8;          // harmless up to this count; higher for denser world
 
 // Reproduction. Any agent with enough energy AND at least one cell-mate
 // can reproduce. Rate is tuned to balance DEATH_FROM_AGE_PROB at small
@@ -102,7 +107,7 @@ export const REPRO_PROB_PER_NEIGHBOUR = 0.0022;   // per any cell-mate
 export const REPRO_MAX_PROB = 0.03;
 // Hard ecological ceiling — lower than current prod to keep population
 // around a TPS-friendly ~30k at equilibrium instead of runaway.
-export const REPRO_CELL_CARRYING_CAPACITY = 8;
+export const REPRO_CELL_CARRYING_CAPACITY = 12; // denser world — more agents per cell before repro stops
 export const REPRO_PARENT_ENERGY_AFTER = 0.3;  // parent drops low after repro
 export const CHILD_INIT_ENERGY = 0.3;          // child starts low
 export const CHILD_INHERIT_PROB = 0.35;        // per parent-belief, chance child gets it — lower keeps grey substrate alive
@@ -114,13 +119,13 @@ export const CHILD_SPAWN_OFFSET = 5.0;         // world units from parent
 // agent to invent a fully-formed (active) new belief. Kept very low so a
 // handful of cults compete for the whole world, instead of thousands of
 // one-cell islands that never meet each other.
-export const SPONTANEOUS_INVENT_PROB = 0.004;  // rare — a handful of cults, not dozens
+export const SPONTANEOUS_INVENT_PROB = 0.0008; // rare — a handful of cults, not dozens — scaled for ~100k
 export const SPONTANEOUS_INITIAL_CRED = 0.85; // new inventor starts active
 
 // Syncretism / belief fusion. When two agents holding different active beliefs
 // from different centers meet repeatedly, a hybrid belief can emerge that
 // combines one's center with the other's frame. Rare — rarer than schism.
-export const FUSION_PROB = 0.0003;        // per differing-belief pair per tick
+export const FUSION_PROB = 0.00006;       // per differing-belief pair per tick — scaled for ~100k density
 export const FUSION_MIN_CRED = 0.75;      // both agents must be at least this credible
 export const FUSION_CRED = 0.65;          // credibility the two founders get in the new belief
 
@@ -134,16 +139,23 @@ export const CRUSADE_SIGHT_CELLS = 20;       // how many grid cells out to scan 
 export const CRUSADE_SEEK_PROB = 0.75;       // when a crusader moves, chance it's a crusade seek (vs wander)
 export const CRUSADE_PROBES = 8;             // kept for signature compat (unused in deterministic scan)
 
+// Missionary. A lone active-belief agent (few or no same-belief allies) that
+// wanders far from its home cluster, seeking grey (non-reactionary) agents to
+// convert. Models the "peer/network cop" tier — lone zealots recruiting.
+export const MISSIONARY_MAX_ALLIES = 1;   // if same-belief neighbours ≤ this, agent is a missionary
+export const MISSIONARY_MOVE_PROB = 0.25; // per tick: missionary decides to move (higher than normal)
+export const MISSIONARY_SEEK_PROB = 0.8;  // when moving, seeks grey target over random wander
+
 // Crowd-seek. Every agent — believer or not — occasionally looks for the
 // nearest *any-population* cell and heads there. Pulls loners into clumps
 // and pushes clumps toward each other so they eventually touch.
 export const CROWD_SEEK_PROB = 0.35;         // when an isolated agent seeks, chance this is a crowd-seek
-export const CROWD_SIGHT_CELLS = 40;         // ≈ 320 world units — enough to find distant clusters
+export const CROWD_SIGHT_CELLS = 20;         // ≈ 160 world units — at 100k density clusters are closer
 
 // Fights. When two agents both hold active beliefs but those beliefs differ,
 // they may clash. Probability is small per-tick so fights are punctuation,
 // not a constant. Strength = energy × credibility × (1 + ally-bonus).
-export const FIGHT_PROB = 0.05;
+export const FIGHT_PROB = 0.01;            // scaled for ~100k density — 5× more contacts, same fight rate
 export const FIGHT_ALLY_BONUS = 0.08;           // each same-belief cellmate multiplies strength by (1 + this)
 export const FIGHT_ENERGY_COST_WINNER = 0.06;
 export const FIGHT_ENERGY_COST_LOSER = 0.2;

@@ -149,7 +149,7 @@ self.onmessage = (e: MessageEvent<MainToWorker>) => {
 // A link is valid only if the converter is alive + active AND the conversion
 // happened within DEPTH_WINDOW ticks of now. This gives a contemporaneous
 // hierarchy reading that reflects current social structure, not lifetime genealogy.
-const DEPTH_WINDOW = 80;
+const DEPTH_WINDOW = 120; // ~3 seconds at 40 TPS — enough for multi-tier chains to manifest
 function computeEnforcementDepth(s: SimState): number {
   const { convertedBy, convertedAtTick, alive, count, dominantBelief } = s;
   let maxDepth = 0;
@@ -158,13 +158,14 @@ function computeEnforcementDepth(s: SimState): number {
     if (!alive[i] || convertedBy[i] === 0 || dominantBelief[i] === 0) continue;
     let depth = 1;
     let cur = convertedBy[i] - 1;
-    while (
-      cur >= 0 && cur < count &&
-      alive[cur] && dominantBelief[cur] !== 0 &&
-      convertedAtTick[cur] >= minTick &&
-      depth < 30
-    ) {
+    let prevTick = convertedAtTick[i]; // link must be strictly older than previous
+    while (cur >= 0 && cur < count && alive[cur] && dominantBelief[cur] !== 0) {
+      const curTick = convertedAtTick[cur];
+      // Cycle/stale guard: each converter must have been converted before the
+      // previous link AND within the window. Strictly less-than prevents cycles.
+      if (curTick >= prevTick || curTick < minTick) break;
       depth++;
+      prevTick = curTick;
       cur = convertedBy[cur] - 1;
     }
     if (depth > maxDepth) maxDepth = depth;
@@ -212,6 +213,7 @@ function runQuery(
       index: snappedAgent,
       x: state.positions[snappedAgent * 2],
       y: state.positions[snappedAgent * 2 + 1],
+      energy: state.energies[snappedAgent],
       beliefs: agentBeliefList(snappedAgent),
     };
     return result;
@@ -255,6 +257,7 @@ function runQuery(
       index: snapBest,
       x: positions[snapBest * 2],
       y: positions[snapBest * 2 + 1],
+      energy: state.energies[snapBest],
       beliefs: agentBeliefList(snapBest),
     };
     // Keep matchCount = hits length so the UI can still show "N agents nearby"
@@ -283,6 +286,7 @@ function runQuery(
       index: best,
       x: positions[best * 2],
       y: positions[best * 2 + 1],
+      energy: state.energies[best],
       beliefs: agentBeliefList(best),
     };
     return result;

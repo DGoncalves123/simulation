@@ -1,11 +1,12 @@
 import {
   CROWD_SEEK_PROB, CROWD_SIGHT_CELLS, CRUSADE_ALLY_THRESHOLD,
   CRUSADE_SEEK_PROB, CRUSADE_SIGHT_CELLS, DORMANCY_THRESHOLD,
-  MAX_BELIEFS_PER_AGENT, MAX_SPEED, MOVE_PROB, MOVE_PROB_ISOLATED, SEEK_PROB,
+  MAX_BELIEFS_PER_AGENT, MAX_SPEED, MISSIONARY_MAX_ALLIES, MISSIONARY_MOVE_PROB,
+  MISSIONARY_SEEK_PROB, MOVE_PROB, MOVE_PROB_ISOLATED, SEEK_PROB,
   SEEK_PROB_ISOLATED, VELOCITY_DAMPING, WORLD_SIZE,
 } from './constants';
 import type { SpatialGrid } from './grid';
-import { getDominantByCell, getSameBeliefNeighbours } from './interact';
+import { getAnyAboveDormancy, getDominantByCell, getSameBeliefNeighbours } from './interact';
 import type { SimState } from './state';
 
 // Motion model (spec addendum):
@@ -30,6 +31,7 @@ export function tick(state: SimState, grid: SpatialGrid, rand: () => number): vo
   const cellStart = grid.cellStart;
   const dominantByCell = getDominantByCell();
   const allies = getSameBeliefNeighbours();
+  const anyDorm = getAnyAboveDormancy();
 
   for (let i = 0; i < count; i++) {
     if (!alive[i]) continue;
@@ -45,17 +47,22 @@ export function tick(state: SimState, grid: SpatialGrid, rand: () => number): vo
     const cellPop = cellStart[cIdx + 1] - cellStart[cIdx];
     const isolated = cellPop <= 1;
 
-    // Crusader: packed in with enough same-belief allies AND has an active
-    // belief to defend. Still uses the same per-tick move probability as
-    // normal motion, but when the move fires, it prefers hunting enemies.
+    // Missionary: lone active-belief agent with few same-belief neighbours —
+    // wanders proactively seeking grey targets to convert. Models the peer/
+    // network cop tier from the spec.
     const myBelief = dominantBelief[i];
-    const isCrusader = myBelief !== 0 && (allies[i] | 0) >= CRUSADE_ALLY_THRESHOLD;
+    const allyCount = allies[i] | 0;
+    const isMissionary = myBelief !== 0 && allyCount <= MISSIONARY_MAX_ALLIES;
+
+    // Crusader: packed in with enough same-belief allies AND has an active
+    // belief to defend. Mutually exclusive with missionary.
+    const isCrusader = !isMissionary && myBelief !== 0 && allyCount >= CRUSADE_ALLY_THRESHOLD;
 
     // Overcrowded agents wander more to leak outward, breaking up walls.
     const overcrowded = cellPop >= 9;
-    const moveProb = isolated
-      ? MOVE_PROB_ISOLATED
-      : (overcrowded ? MOVE_PROB * 2 : MOVE_PROB);
+    const moveProb = isMissionary
+      ? MISSIONARY_MOVE_PROB
+      : (isolated ? MOVE_PROB_ISOLATED : (overcrowded ? MOVE_PROB * 2 : MOVE_PROB));
     const seekProb = isolated
       ? SEEK_PROB_ISOLATED
       : (overcrowded ? 0 : SEEK_PROB); // overcrowded: pure random wander
@@ -65,7 +72,18 @@ export function tick(state: SimState, grid: SpatialGrid, rand: () => number): vo
       let dy = 0;
       let handled = false;
 
-      if (isCrusader && rand() < CRUSADE_SEEK_PROB) {
+      if (isMissionary && rand() < MISSIONARY_SEEK_PROB) {
+        const greyTarget = findGreyTarget(state, grid, rand, i, stride, anyDorm);
+        if (greyTarget >= 0) {
+          dx = positions[greyTarget * 2] - positions[ix];
+          dy = positions[greyTarget * 2 + 1] - positions[iy];
+          if (dx > half) dx -= WORLD_SIZE; else if (dx < -half) dx += WORLD_SIZE;
+          if (dy > half) dy -= WORLD_SIZE; else if (dy < -half) dy += WORLD_SIZE;
+          handled = true;
+        }
+      }
+
+      if (!handled && isCrusader && rand() < CRUSADE_SEEK_PROB) {
         const enemyDir = findEnemyCell(
           cx, cy, myBelief, dominantByCell, cellsPerAxis, rand,
         );
@@ -177,6 +195,34 @@ function pickSeekTarget(
   let target = (rand() * count) | 0;
   if (target === i) target = (target + 1) % count;
   return target;
+}
+
+// Missionary seek: scan a few nearby cells for a non-reactionary (grey) agent.
+// Returns agent index of nearest grey, or -1 if none found.
+function findGreyTarget(
+  state: SimState,
+  grid: SpatialGrid,
+  rand: () => number,
+  i: number,
+  stride: number,
+  anyDorm: Uint8Array,
+): number {
+  const { positions, alive } = state;
+  const ix = positions[i * 2];
+  const iy = positions[i * 2 + 1];
+  let best = -1;
+  let bestD2 = Infinity;
+  // Scan a 5-cell radius for grey agents, pick the nearest.
+  grid.forEachInRadius(ix, iy, grid.cellSize * 5, (j) => {
+    if (j === i || !alive[j] || anyDorm[j]) return;
+    const dx = positions[j * 2] - ix;
+    const dy = positions[j * 2 + 1] - iy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = j; }
+  });
+  // Suppress unused param warning
+  void rand; void stride;
+  return best;
 }
 
 // Crowd-seek: spiral outward from (cx, cy) looking for any populated cell.

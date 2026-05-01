@@ -28,6 +28,7 @@ export interface AgentDetails {
   index: number;
   x: number;
   y: number;
+  energy: number;
   beliefs: AgentBelief[];
 }
 
