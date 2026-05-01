@@ -4,7 +4,7 @@ import {
 } from '../sim/constants';
 import { createBeliefRegistry, type BeliefRegistry } from '../sim/beliefs';
 import { SpatialGrid } from '../sim/grid';
-import { interact } from '../sim/interact';
+import { interact, setInteractTick } from '../sim/interact';
 import { maybeInvent } from '../sim/invent';
 import { mulberry32 } from '../sim/rng';
 import { createState, seedAgents, type SimState } from '../sim/state';
@@ -23,6 +23,7 @@ let tickCount = 0;
 let lastStatsAt = 0;
 let ticksSinceStats = 0;
 let tps = 0;
+let enforcementDepth = 0;
 
 const spareBuffers: ArrayBuffer[] = [];
 
@@ -58,12 +59,16 @@ function loop(): void {
   if (grid && registry) {
     tick(state, grid, simRand);
     grid.build(state);
+    setInteractTick(tickCount);
     interact(state, grid, registry, simRand);
     vital(state, grid, registry, simRand);
   }
   if (registry) maybeInvent(state, registry, simRand);
   tickCount++;
   ticksSinceStats++;
+  if (tickCount % 200 === 0 && state) {
+    enforcementDepth = computeEnforcementDepth(state);
+  }
 
   const now = performance.now();
   if (now - lastStatsAt > 500) {
@@ -77,7 +82,7 @@ function loop(): void {
     if (buf.byteLength < state.live * 4 * 4) break;
     spareBuffers.shift();
     const count = snapshotInto(buf);
-    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps }, [buf]);
+    post({ type: 'frame', buffer: buf, count, live: state.live, tick: tickCount, tps, enforcementDepth }, [buf]);
     break; // one frame per tick is enough
   }
 
@@ -128,6 +133,33 @@ self.onmessage = (e: MessageEvent<MainToWorker>) => {
     }
   }
 };
+
+// Walk convertedBy chains for the longest *recent* enforcement depth.
+// A link is valid only if the converter is alive + active AND the conversion
+// happened within DEPTH_WINDOW ticks of now. This gives a contemporaneous
+// hierarchy reading that reflects current social structure, not lifetime genealogy.
+const DEPTH_WINDOW = 80;
+function computeEnforcementDepth(s: SimState): number {
+  const { convertedBy, convertedAtTick, alive, count, dominantBelief } = s;
+  let maxDepth = 0;
+  const minTick = tickCount - DEPTH_WINDOW;
+  for (let i = 0; i < count; i++) {
+    if (!alive[i] || convertedBy[i] === 0 || dominantBelief[i] === 0) continue;
+    let depth = 1;
+    let cur = convertedBy[i] - 1;
+    while (
+      cur >= 0 && cur < count &&
+      alive[cur] && dominantBelief[cur] !== 0 &&
+      convertedAtTick[cur] >= minTick &&
+      depth < 30
+    ) {
+      depth++;
+      cur = convertedBy[cur] - 1;
+    }
+    if (depth > maxDepth) maxDepth = depth;
+  }
+  return maxDepth;
+}
 
 function agentBeliefList(i: number): AgentBelief[] {
   if (!state || !registry) return [];

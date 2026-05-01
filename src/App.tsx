@@ -16,7 +16,7 @@ interface HoverState {
 
 export function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stats, setStats] = useState({ fps: 0, tps: 0, count: 0, tick: 0 });
+  const [stats, setStats] = useState({ fps: 0, tps: 0, count: 0, tick: 0, depth: 0 });
   const [hover, setHover] = useState<HoverState | null>(null);
 
   useEffect(() => {
@@ -54,6 +54,7 @@ export function App() {
     let fps = 0;
     let tps = 0;
     let tick = 0;
+    let depth = 0;
 
     // Hover/query state (kept in refs/local to avoid rerenders on every frame).
     let mouseCssX = -1;
@@ -80,6 +81,7 @@ export function App() {
         pendingReturn = msg.buffer;
         tps = msg.tps;
         tick = msg.tick;
+        depth = msg.enforcementDepth;
       } else if (msg.type === 'queryResult') {
         if (msg.result.id !== latestQueryId) return; // stale
         if (!mouseOverCanvas || dragging) return;
@@ -199,7 +201,7 @@ export function App() {
         fps = (framesInWindow * 1000) / (now - lastFpsAt);
         framesInWindow = 0;
         lastFpsAt = now;
-        setStats({ fps, tps, count: latestCount, tick });
+        setStats({ fps, tps, count: latestCount, tick, depth });
       }
       // Keep the tooltip live as the sim moves under the cursor.
       maybeQuery();
@@ -253,6 +255,7 @@ export function App() {
         <div>fps: {stats.fps.toFixed(0)}</div>
         <div>tps: {stats.tps.toFixed(0)}</div>
         <div>tick: {stats.tick.toLocaleString()}</div>
+        <div>depth: {stats.depth}</div>
         <div style={{ opacity: 0.6, marginTop: 4 }}>drag to pan · wheel to zoom · hover for beliefs</div>
       </div>
       {hover && (

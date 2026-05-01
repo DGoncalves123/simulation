@@ -15,6 +15,9 @@ import type { SpatialGrid } from './grid';
 import type { SimState } from './state';
 import { killAgent, upsertBelief } from './state';
 
+let currentTick = 0;
+export function setInteractTick(t: number): void { currentTick = t; }
+
 let anyAboveDormancy: Uint8Array = new Uint8Array(0);
 let hasActive: Uint8Array = new Uint8Array(0);
 let nearNonReactionary: Uint8Array = new Uint8Array(0);
@@ -283,6 +286,9 @@ export function interact(
       if (c > bestCred) { bestCred = c; bestId = id; }
     }
     dominantBelief[i] = bestId;
+    // If agent has gone grey (no active belief), their lineage chain is broken —
+    // they are no longer part of any enforcement tier.
+    if (bestId === 0) { state.convertedBy[i] = 0; state.convertedAtTick[i] = 0; }
   }
 
   // Pass 4c: per-cell dominant belief (Boyer–Moore plurality). Only walks
@@ -432,7 +438,14 @@ function pairInteract(
       const resist = hasActive[b] ? ENFORCE_RESIST_FACTOR : 1.0;
       let bump = ENFORCE_BUMP * resist;
       if (bHoldsParent) bump += KIN_ADOPT_BONUS;
-      upsertBelief(state, b, idA, bump);
+      // Only record lineage when b was genuinely non-reactionary (no active
+      // belief) before this conversion — real first-contact indoctrination.
+      // Reinforcements between two existing believers don't extend the chain.
+      {
+        const bWasGrey = !hasActive[b];
+        upsertBelief(state, b, idA, bump);
+        if (bWasGrey) { state.convertedBy[b] = a + 1; state.convertedAtTick[b] = currentTick; }
+      }
       if (resist < 1.0) {
         const nc = credA - CONFLICT_DRAIN;
         credibilities[baseA + k] = nc < 0 ? 0 : nc;
@@ -475,7 +488,11 @@ function pairInteract(
       const resist = hasActive[a] ? ENFORCE_RESIST_FACTOR : 1.0;
       let bump = ENFORCE_BUMP * resist;
       if (aHoldsParent) bump += KIN_ADOPT_BONUS;
-      upsertBelief(state, a, idB, bump);
+      {
+        const aWasGrey = !hasActive[a];
+        upsertBelief(state, a, idB, bump);
+        if (aWasGrey) { state.convertedBy[a] = b + 1; state.convertedAtTick[a] = currentTick; }
+      }
       if (resist < 1.0) {
         const nc = credB - CONFLICT_DRAIN;
         credibilities[baseB + k] = nc < 0 ? 0 : nc;
@@ -603,8 +620,10 @@ function resolveFight(
   }
   energies[loser] = le;
 
-  // Forced conversion at swordpoint — winner's belief installed on loser at
-  // sub-active credibility so it's a *dormant infection*, not instant conversion.
+  // Forced conversion at swordpoint — winner's belief installed as dormant
+  // infection. Fight conversions break the loser's lineage chain — the loser
+  // is now a defeated enemy, not a peacetime convert. Clear their chain.
+  state.convertedBy[loser] = 0;
   upsertBelief(state, loser, winnerId, FIGHT_CONVERT_CRED);
 
   // Scatter push — loser flees away from winner, carrying the dormant belief.

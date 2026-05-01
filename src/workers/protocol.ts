@@ -54,5 +54,5 @@ export interface QueryResult {
 
 export type WorkerToMain =
   | { type: 'ready'; count: number }
-  | { type: 'frame'; buffer: ArrayBuffer; count: number; live: number; tick: number; tps: number }
+  | { type: 'frame'; buffer: ArrayBuffer; count: number; live: number; tick: number; tps: number; enforcementDepth: number }
   | { type: 'queryResult'; result: QueryResult };

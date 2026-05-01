@@ -18,6 +18,12 @@ export interface SimState {
   credibilities: Float32Array;
   // Dominant-active-belief ID for rendering. 0 = no active belief (grey).
   dominantBelief: Uint32Array;
+  // Enforcement lineage: convertedBy[i] = j+1 means agent j last force-converted
+  // agent i. 0 means unknown/no converter. Used to compute enforcement depth chains.
+  convertedBy: Int32Array;
+  // Tick at which convertedBy[i] was last written. Stale links are ignored
+  // in depth computation so only *recent* enforcement chains count.
+  convertedAtTick: Int32Array;
   // Pre-allocated stack of freed indices. Push on death, pop on birth.
   freeSlots: Int32Array;
   freeCount: number;
@@ -35,6 +41,8 @@ export function createState(capacity: number = MAX_AGENTS): SimState {
     beliefIds: new Uint32Array(capacity * MAX_BELIEFS_PER_AGENT),
     credibilities: new Float32Array(capacity * MAX_BELIEFS_PER_AGENT),
     dominantBelief: new Uint32Array(capacity),
+    convertedBy: new Int32Array(capacity),
+    convertedAtTick: new Int32Array(capacity),
     freeSlots: new Int32Array(capacity),
     freeCount: 0,
   };
@@ -66,6 +74,8 @@ export function killAgent(state: SimState, i: number): void {
   state.velocities[i * 2 + 1] = 0;
   state.energies[i] = 0;
   state.dominantBelief[i] = 0;
+  state.convertedBy[i] = 0;
+  state.convertedAtTick[i] = 0;
   const base = i * MAX_BELIEFS_PER_AGENT;
   for (let k = 0; k < MAX_BELIEFS_PER_AGENT; k++) {
     state.beliefIds[base + k] = 0;
